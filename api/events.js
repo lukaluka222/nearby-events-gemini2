@@ -1,131 +1,132 @@
-import cheerio from 'cheerio';
-import fetch from 'node-fetch';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+// api/events.js — 安全版（最小の依存: なし。Geminiはある場合のみ）
+// 1) HTML -> テキスト  2) Geminiで抽出  3) 距離で並べる
+// 失敗しても 200 + 空配列を返す。?debug=1 で内部エラーを見られる。
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+let model = null;
+async function getModel() {
+  if (!process.env.GEMINI_API_KEY) return null;
+  if (model) return model;
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  return model;
+}
 
-// まずは少数の「中身が濃い固定URL」に絞るのがコツ（必要に応じて差し替え）
+// まずは “情報が載ってる固定URL” に絞る（増やすのは後でOK）
 const SOURCES = [
-  // 相模原市のイベント詳細・施設イベント一覧などに置き換えてください
-  'https://www.google.com/search?q=%E7%9B%B8%E6%A8%A1%E5%8E%9F+%E5%85%AC%E6%B0%91%E9%A4%A8+%E3%83%AF%E3%83%BC%E3%82%AF%E3%82%B7%E3%83%A7%E3%83%83%E3%83%97',
-  'https://www.google.com/search?q=%E7%9B%B8%E6%A8%A1%E5%B7%9D%E3%81%B5%E3%82%8C%E3%81%82%E3%81%84%E7%A7%91%E5%AD%A6%E9%A4%A8+%E3%82%A4%E3%83%99%E3%83%B3%E3%83%88',
-  'https://www.youtube.com/results?search_query=' + encodeURIComponent('相模原 自発 体験 手芸 苔')
+  // TODO: 相模原市のイベント詳細ページ等に差し替えると精度UP
+  'https://www.city.sagamihara.kanagawa.jp/', // トップは例。実際はイベント詳細URLにする
+  'https://sagamigawa-fureai.com/',           // 施設サイトのイベント/お知らせページなど
 ];
 
-let CACHE = { time: 0, items: [] };
-const TTL_MS = 1000 * 60 * 60 * 6; // 6時間
-
 export default async function handler(req, res) {
+  const url = new URL(req.url, `https://${req.headers.host}`);
+  const q   = url.searchParams.get('q') || '';
+  const lat = Number(url.searchParams.get('lat') || '35.5710');
+  const lon = Number(url.searchParams.get('lon') || '139.3707');
+  const radius = Math.min(Number(url.searchParams.get('radius') || '8'), 30);
+  const debug = url.searchParams.get('debug') === '1';
+
+  const errors = [];
+
   try {
-    const url = new URL(req.url, `https://${req.headers.host}`);
-    const q   = url.searchParams.get('q') || '';
-    const lat = Number(url.searchParams.get('lat') || '35.5710');
-    const lon = Number(url.searchParams.get('lon') || '139.3707');
-    const radius = Math.min(Number(url.searchParams.get('radius') || '8'), 30);
-
-    // キャッシュが新鮮ならそれを返す
-    const now = Date.now();
-    if (now - CACHE.time < TTL_MS && CACHE.items.length) {
-      const filtered = filterByRadius(CACHE.items, lat, lon, radius);
-      return res.status(200).json(rerank(filtered, q, { lat, lon }));
-    }
-
-    // 収集：各URLの本文テキストをまとめる
+    // 1) 収集：本文テキストをざっくり抽出（fetch は Node18+ で標準）
     let allText = '';
     for (const src of SOURCES) {
-      const t = await fetchText(src);
-      allText += '\n\n' + t;
+      try {
+        const r = await fetch(src, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const html = await r.text();
+        // 超簡易テキスト化（cheerio無し）：タグを削って空白整理
+        const text = html
+          .replace(/<script[^>]*>.*?<\/script>/gis, ' ')
+          .replace(/<style[^>]*>.*?<\/style>/gis, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .slice(0, 18000); // 18KBまでに縮める
+        allText += '\n\n' + text;
+      } catch (e) {
+        errors.push(`fetch fail: ${src} :: ${e.message}`);
+      }
     }
 
-    // Geminiでイベント抽出
-    const events = await extractEvents(allText, q);
-
-    // 正規化＆重複排除
-    const map = new Map();
-    for (const e of events) {
-      const key = `${e.title || ''}@${e.place || ''}`;
-      if (!map.has(key)) map.set(key, normalize(e));
-    }
-    const items = [...map.values()];
-    CACHE = { time: now, items };
-
-    const filtered = filterByRadius(items, lat, lon, radius);
-    return res.status(200).json(rerank(filtered, q, { lat, lon }));
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'server_error', message: e.message });
-  }
-}
-
-// ============ ユーティリティ ============
-
-async function fetchText(url) {
-  try {
-    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const html = await r.text();
-    const $ = cheerio.load(html);
-    return $('body').text().replace(/\s+/g, ' ').slice(0, 20000);
-  } catch (e) {
-    console.warn('fetch fail', url, e.message);
-    return '';
-  }
-}
-
-async function extractEvents(rawText, query) {
-  if (!rawText) return [];
-  const prompt =
-`あなたはイベント抽出のアシスタントです。以下の本文から、
+    // 2) GeminiでJSON抽出（キーが無ければ空配列）
+    let events = [];
+    try {
+      const m = await getModel();
+      if (m && allText.trim()) {
+        const prompt =
+`あなたはイベント抽出アシスタントです。以下の本文から、
 「相模原市および近隣で、中学生も参加できそうな小規模の体験・ワークショップ・観察・展示」
-に該当する候補を最大10件、JSON配列で返してください。
-出力は必ず次のスキーマのみ:
+に該当する候補を最大10件、JSON配列のみで返してください。
+スキーマ:
 [{"title":"...","description":"...","place":"...","lat":null,"lon":null,"price":null,"when":"...","tags":["..."],"url":"..."}]
-不明は null/空文字で返す。憶測で住所や価格を入れない。
-キーワード: ${query || ''}
-本文: ${rawText}`;
-  const out = await model.generateContent(prompt);
-  const txt = out.response.text();
-  try {
-    const s = txt.indexOf('['), e = txt.lastIndexOf(']') + 1;
-    const arr = JSON.parse(txt.slice(s, e));
-    return Array.isArray(arr) ? arr : [];
+不明は null/空文字。憶測で住所や価格を入れない。
+キーワード: ${q}
+本文: ${allText}`;
+
+        const out = await m.generateContent(prompt);
+        const txt = out.response.text();
+        // JSONだけを切り出してパース
+        const s = txt.indexOf('['), e = txt.lastIndexOf(']') + 1;
+        if (s >= 0 && e > s) {
+          events = JSON.parse(txt.slice(s, e));
+        } else {
+          errors.push('gemini: no JSON block');
+        }
+      } else {
+        errors.push('gemini: no key or empty text');
+      }
+    } catch (e) {
+      errors.push('gemini parse: ' + e.message);
+      // 失敗しても落とさない
+    }
+
+    // 3) 正規化・スコアリング・半径フィルタ
+    const norm = events.map(normalize);
+    const filtered = norm.filter(it =>
+      (it.lat!=null && it.lon!=null) ? km({lat,lon},{lat:it.lat,lon:it.lon}) <= radius : true
+    );
+    const ranked = rerank(filtered, q, { lat, lon });
+
+    // デバッグ要求があれば内部状態も返す（本番ではdebug=1を付けた時だけ）
+    if (debug) {
+      return res.status(200).json({ ok: true, count: ranked.length, errors, sample: ranked.slice(0,3) });
+    }
+    return res.status(200).json(ranked);
+
   } catch (e) {
-    console.warn('parse fail', e.message, txt.slice(0,200));
-    return [];
+    // ここまで来ても 500 は出さず 200 + 空配列で返すとUIは生きる
+    if (debug) {
+      return res.status(200).json({ ok: false, errors: [`fatal: ${e.message}`] });
+    }
+    return res.status(200).json([]);
   }
 }
 
+// ===== ユーティリティ =====
 function normalize(e) {
   return {
-    title: e.title?.trim() || '',
-    description: e.description?.trim() || '',
-    place: e.place?.trim() || '',
-    lat: typeof e.lat === 'number' ? e.lat : null,
-    lon: typeof e.lon === 'number' ? e.lon : null,
-    price: typeof e.price === 'number' ? e.price : null,
-    when: e.when?.trim() || '',
-    tags: Array.isArray(e.tags) ? e.tags.slice(0, 8) : [],
-    url: e.url || ''
+    title: e?.title?.toString().trim() || '',
+    description: e?.description?.toString().trim() || '',
+    place: e?.place?.toString().trim() || '',
+    lat: (typeof e?.lat === 'number') ? e.lat : null,
+    lon: (typeof e?.lon === 'number') ? e.lon : null,
+    price: (typeof e?.price === 'number') ? e.price : null,
+    when: e?.when?.toString().trim() || '',
+    tags: Array.isArray(e?.tags) ? e.tags.slice(0,8).map(t=>t.toString()) : [],
+    url: e?.url?.toString() || ''
   };
 }
-
 function km(a, b) {
-  const R = 6371, toRad = (d) => d * Math.PI / 180;
+  const R = 6371, toRad = d => d*Math.PI/180;
   const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
   const la = toRad(a.lat), lb = toRad(b.lat);
   const h = Math.sin(dLat/2)**2 + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
   return R*2*Math.atan2(Math.sqrt(h), Math.sqrt(1-h));
 }
-
-function filterByRadius(items, lat, lon, radius) {
-  return items.filter(it =>
-    (it.lat != null && it.lon != null) ? km({lat,lon},{lat:it.lat,lon:it.lon}) <= radius : true
-  );
-}
-
 function rerank(items, q, origin) {
   return items.map(it => {
-    const hasPos = (it.lat != null && it.lon != null);
+    const hasPos = (it.lat!=null && it.lon!=null);
     const d = hasPos ? km(origin, { lat: it.lat, lon: it.lon }) : 99;
     let s = 0;
     if (d <= 3) s += 15; else if (d <= 5) s += 10; else if (d <= 10) s += 6; else s += 2;
@@ -134,6 +135,7 @@ function rerank(items, q, origin) {
       if (hit) s += 12;
     }
     return { ...it, score: s, distance_km: hasPos ? Number(d.toFixed(1)) : null };
-  }).sort((a,b) => (b.score||0) - (a.score||0)).slice(0, 20);
+  }).sort((a,b) => (b.score||0)-(a.score||0)).slice(0, 20);
 }
+
 
