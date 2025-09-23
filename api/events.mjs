@@ -1,4 +1,4 @@
-// api/events.mjs — リンク抽出→イベント配列に整形（簡易 when 抽出付き）
+// api/events.mjs — リンク抽出 → イベント配列（簡易 when 抽出つき）
 // ESM 版（export default）。fetch は Node18+ で標準。
 
 function send(res, obj) {
@@ -21,21 +21,19 @@ function norm(s=''){
   return s.toString().normalize('NFKC').toLowerCase().replace(/こけ|ｺｹ/g,'苔');
 }
 
-// タイトルから日付区間っぽい文字列を抜く（超簡易）
+// タイトルから日付らしき文字列を抜く（超簡易）
 function extractWhen(label) {
   const s = label.replace(/\s+/g,' ');
-  // 例：2025年9月/9月/9/24/ など
-  const re1 = /((20\d{2})?年?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*[（(][^）)]+[）)])?)/g;
-  const re2 = /(\d{1,2}\/\d{1,2}(?:\s*[-〜～]\s*\d{1,2}\/\d{1,2})?)/g;
-  const re3 = /(\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?(?:\s*[-〜～]\s*\d{1,2}\s*月?\s*\d{0,2}\s*日?)?)/g;
-
+  const re1 = /(?:20\d{2}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*[（(][^）)]+[）)])?/g; // 2025年9月24日（火） 等
+  const re2 = /\d{1,2}\/\d{1,2}(?:\s*[-〜～]\s*\d{1,2}\/\d{1,2})?/g;                     // 9/24〜9/28 等
+  const re3 = /\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?(?:\s*[-〜～]\s*\d{1,2}\s*月?\s*\d{0,2}\s*日?)?/g; // 9月 or 9月24日〜10月1日
   let m = s.match(re1); if (m && m.join('').trim()) return m.join(' / ');
   m = s.match(re2); if (m && m.join('').trim()) return m.join(' / ');
   m = s.match(re3); if (m && m.join('').trim()) return m.join(' / ');
   return '';
 }
 
-// ラベルを軽く整形（【】や全角スペースの整理）
+// ラベル整形
 function cleanTitle(label=''){
   return label
     .replace(/[【】「」『』［］\[\]（）()]/g,' ')
@@ -52,7 +50,7 @@ export default async function handler(req, res) {
   const q     = norm(qRaw);
   const debug = url.searchParams.get('debug') === '1';
 
-  // 既存のモックは残す
+  // --- モック（動作確認用） ---
   if (mode === 'mock') {
     const LINKS = [
       { url:'https://example.com/koke1', label:'苔の観察ワークショップ（相模原）' },
@@ -66,7 +64,7 @@ export default async function handler(req, res) {
     return send(res, { ok:true, from:'mock', q:qRaw, count:hit.length, sample:hit.slice(0,8) });
   }
 
-  // 実サイトからリンク収集
+  // --- 実サイトからリンク収集 ---
   const links = [];
   for (const src of SOURCES) {
     try {
@@ -85,9 +83,10 @@ export default async function handler(req, res) {
     } catch {}
   }
 
-  // mode=links はデバッグ用に生リンクの一部を返す
+  const GENERIC = /(イベント|体験|ワークショップ|講座|教室|観察|自然|展示|工作|工房|ミッション)/;
+
+  // --- mode=links（デバッグ用：生リンクを確認） ---
   if (mode === 'links') {
-    const GENERIC = /(イベント|体験|ワークショップ|講座|教室|観察|自然|展示|工作|工房|ミッション)/;
     const filtered = q
       ? links.filter(L => L.labelN.includes(q))
       : links.filter(L => GENERIC.test(L.label));
@@ -95,9 +94,8 @@ export default async function handler(req, res) {
     return send(res, { ok:true, q:qRaw, total_links:links.length, count:sample.length, sample });
   }
 
-  // 通常モード：リンク → 簡易イベント配列に整形
+  // --- 通常モード：リンク → イベント配列に整形して返す ---
   // 1) q に一致 or 汎用語ヒット
-  const GENERIC = /(イベント|体験|ワークショップ|講座|教室|観察|自然|展示|工作|工房|ミッション)/;
   let picked = q ? links.filter(L => L.labelN.includes(q)) : links.filter(L => GENERIC.test(L.label));
 
   // 2) ドメイン上限 & 重複除去
@@ -108,14 +106,14 @@ export default async function handler(req, res) {
   for (const L of picked) {
     if (byUrl.has(L.url)) continue;
     byUrl.set(L.url, true);
-    let host = ''; try { host = new URL(L.url).host.replace(/^www\./,''); } catch {}
+    let host=''; try { host = new URL(L.url).host.replace(/^www\./,''); } catch {}
     domainCount[host] = (domainCount[host] || 0) + 1;
     if (host && domainCount[host] > perDomainCap) continue;
     kept.push(L);
     if (kept.length >= 20) break;
   }
 
-  // 3) イベント形に変換（when をタイトルから推定）
+  // 3) イベント形へ
   const events = kept.map(L => ({
     title: cleanTitle(L.label),
     description: '',
@@ -131,3 +129,4 @@ export default async function handler(req, res) {
   if (debug) return send(res, { ok:true, count:events.length, sample:events.slice(0,8) });
   return send(res, events);
 }
+
