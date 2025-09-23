@@ -22,6 +22,18 @@ const SOURCES = [
   "https://www.city.sagamihara.kanagawa.jp/kankou/1026674/hayabusa2/1033156.html"
 ];
 
+const prompt =
+`あなたはイベント抽出アシスタントです。以下の本文から、
+「相模原市および近隣で、中学生も参加できそうな小規模の体験・ワークショップ・観察・展示」
+に該当する候補を最大10件、JSON配列のみで返してください。
+スキーマ:
+[{"title":"...","description":"...","place":"...","lat":null,"lon":null,"price":null,"when":"...","tags":["..."],"url":"..."}]
+不明は null/空文字。憶測で住所や価格を入れない。
+**同一または類似イベントは1件に統合し、同一タイトルでも日時・場所が同じなら1件のみ。**
+**可能なら「when」に具体的な日付・期間（YYYY-MM-DD 〜）を入れてください。**
+キーワード: ${q}
+本文: ${allText}`;
+
 
 
 export default async function handler(req, res) {
