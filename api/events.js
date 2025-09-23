@@ -1,18 +1,19 @@
-// api/events.js
-// 1) SOURCESからHTML取得 → 2) Geminiでイベント抽出（任意）→ 3) ダメならリンクfallback（q必須）
+// api/events.js  — Vercel(Node18)向け CommonJS 版
+// 1) SOURCESからHTML取得 → 2) （あれば）Gemini抽出 → 3) だめならリンクfallback（q必須）
 // 4) 正規化・デデュープ・半径フィルタ・スコア → JSON
 
 let model = null;
 async function getModel() {
   if (!process.env.GEMINI_API_KEY) return null;
   if (model) return model;
+  // CommonJS でも動くように dynamic import を使用
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
   return model;
 }
 
-// 当たりやすい一覧直URLにするほど良い
+// ★ 一覧“直”URLにしておくとリンク抽出が効きやすい
 const SOURCES = [
   "https://www.city.sagamihara.kanagawa.jp/event_calendar.html",
   "https://sagamiharacitymuseum.jp/event/",
@@ -22,20 +23,21 @@ const SOURCES = [
   "https://www.e-sagamihara.com/event/"
 ];
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
+  // URL パース（Node18）
   const url = new URL(req.url, `https://${req.headers.host}`);
   const q   = url.searchParams.get('q') || '';
   const lat = Number(url.searchParams.get('lat') || '35.5710');
   const lon = Number(url.searchParams.get('lon') || '139.3707');
   const radius = Math.min(Number(url.searchParams.get('radius') || '8'), 30);
   const debug = url.searchParams.get('debug') === '1';
-  const fresh = url.searchParams.get('fresh') === '1';
-  const mode  = url.searchParams.get('mode') || '';
+  const fresh = url.searchParams.get('fresh') === '1'; // （今は未使用でもOK）
+  const mode  = url.searchParams.get('mode') || '';    // links / mock / （空=通常）
 
   const errors = [];
 
   try {
-    // --- 開発用モック（qで変わるかの確認） ---
+    // --- 開発用モック：qで結果が変わるか即確認 ---
     if (mode === 'mock') {
       const MOCK_LINKS = [
         { url:"https://example.com/koke1", label:"苔の観察ワークショップ（相模原市内）", host:"example.com" },
@@ -50,9 +52,10 @@ export default async function handler(req, res) {
       return res.status(200).json(items);
     }
 
-    // 1) 収集
+    // 1) 収集：各ページを取りにいって、リンクと本文テキストを作る
     let allText = '';
     let allLinks = [];
+
     for (const src of SOURCES) {
       try {
         const r = await fetch(src, {
@@ -63,10 +66,10 @@ export default async function handler(req, res) {
         });
         const html = await r.text();
 
-        // aリンク収集
+        // aタグからリンクとラベル収集
         const linkMatches = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis)];
         for (const m of linkMatches) {
-          const href = m[1];
+          const href  = m[1];
           const label = m[2].replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
           if (!label || label.length < 4) continue;
           let abs = href;
@@ -76,7 +79,7 @@ export default async function handler(req, res) {
           allLinks.push({ url: abs, label, host });
         }
 
-        // プレーンテキスト化
+        // プレーンテキスト化（超簡易）
         const text = html
           .replace(/<script[^>]*>.*?<\/script>/gis, ' ')
           .replace(/<style[^>]*>.*?<\/style>/gis, ' ')
@@ -89,7 +92,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2) GeminiでJSON抽出
+    // 2) GeminiでイベントJSON抽出（キーがあれば）
     let events = [];
     try {
       const m = await getModel();
@@ -105,6 +108,7 @@ export default async function handler(req, res) {
 可能なら「when」に具体的な日付・期間（YYYY-MM-DD 〜）を入れてください。
 キーワード: ${q}
 本文: ${allText}`;
+
         const out = await m.generateContent(prompt);
         const txt = out.response.text();
         const s = txt.indexOf('['), e = txt.lastIndexOf(']') + 1;
@@ -117,10 +121,11 @@ export default async function handler(req, res) {
         errors.push('gemini: no key or empty text');
       }
     } catch (e) {
+      // Gemini無くても落とさない
       errors.push('gemini parse: ' + e.message);
     }
 
-    // 2.5) ゼロ件 → リンクfallback（q必須）
+    // 2.5) 0件ならリンクfallback（★qを必須にする）
     if (!events.length && allLinks.length) {
       const fb = fallbackFromLinks(allLinks, q);
       if (fb.length) {
@@ -129,18 +134,16 @@ export default async function handler(req, res) {
       }
     }
 
-    // mode=links（リンクだけ見たいテスト）
+    // mode=links（リンクのみの確認用）
     if (mode === 'links') {
       const fb = fallbackFromLinks(allLinks, q);
-      if (debug) {
-        return res.status(200).json({ ok: true, from: 'links-only', count: fb.length, sample: fb.slice(0,5), errors });
-      }
+      if (debug) return res.status(200).json({ ok:true, from:'links-only', count:fb.length, sample:fb.slice(0,5), errors });
       return res.status(200).json(fb);
     }
 
     // 3) 正規化 → デデュープ（各ドメイン1件）→ シャッフル → 半径フィルタ → スコア
     const norm = events.map(normalize);
-    const uniq = dedupeAndCap(norm, 1);           // ← “毎回同じ面子”防止に 1 件/ドメイン
+    const uniq = dedupeAndCap(norm, 1);           // ← “毎回同じ面子”防止に1件/ドメイン
     uniq.sort(() => Math.random() - 0.5);         // ばらけ
 
     const filtered = uniq.filter(it =>
@@ -148,18 +151,14 @@ export default async function handler(req, res) {
     );
     const ranked = rerank(filtered, q, { lat, lon });
 
-    if (debug) {
-      return res.status(200).json({ ok: true, count: ranked.length, errors, sample: ranked.slice(0,3) });
-    }
+    if (debug) return res.status(200).json({ ok:true, count: ranked.length, errors, sample: ranked.slice(0,3) });
     return res.status(200).json(ranked);
 
   } catch (e) {
-    if (debug) {
-      return res.status(200).json({ ok: false, errors: [`fatal: ${e.message}`] });
-    }
+    if (debug) return res.status(200).json({ ok:false, errors: [`fatal: ${e.message}`] });
     return res.status(200).json([]);
   }
-}
+};
 
 // ===== ユーティリティ =====
 function normalize(e) {
@@ -232,7 +231,7 @@ function dedupeAndCap(items, perDomainCap=3){
   }
   return kept;
 }
-// q必須のリンクfallback
+// ★ q を必須にするリンクfallback
 function fallbackFromLinks(links, q) {
   const norm = s => (s||'').toString().toLowerCase().normalize('NFKC');
   const qq = norm(q).trim();
@@ -244,7 +243,7 @@ function fallbackFromLinks(links, q) {
     const label = (L.label||'').trim();
     const labN  = norm(label);
     if (qq) {
-      if (!labN.includes(qq)) continue;   // ★ qがある時はq必須
+      if (!labN.includes(qq)) continue;   // q がある時は q 必須
     } else {
       if (!GENERIC.some(w => label.includes(w))) continue;
     }
@@ -262,3 +261,4 @@ function fallbackFromLinks(links, q) {
   }
   return out;
 }
+
