@@ -156,3 +156,45 @@ function rerank(items, q, origin) {
 }
 
 
+function canonicalTitle(s=''){
+  return s.toString()
+    .replace(/[【】「」『』［］（）()［］]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim()
+    .toLowerCase();
+}
+function canonicalWhen(s=''){
+  return s.toString().replace(/\s+/g,' ').trim().toLowerCase();
+}
+function hostOf(u=''){
+  try{ return new URL(u).host.replace(/^www\./,''); }catch{ return ''; }
+}
+
+// 似たものをまとめるキー：タイトル + 場所 + 期間
+function makeKey(e){
+  return [
+    canonicalTitle(e.title||''),
+    (e.place||'').trim().toLowerCase(),
+    canonicalWhen(e.when||'')
+  ].join('@');
+}
+
+// デデュープ＋ドメイン上限（例：各ドメイン最大3件）
+function dedupeAndCap(items, perDomainCap=3){
+  const byKey = new Map();
+  for(const it of items){
+    const key = makeKey(it);
+    if(!byKey.has(key)) byKey.set(key, it);
+  }
+  const deduped = [...byKey.values()];
+  const domainCount = {};
+  const kept = [];
+  for(const it of deduped){
+    const h = hostOf(it.url||'');
+    domainCount[h] = (domainCount[h]||0) + 1;
+    if(!h || domainCount[h] <= perDomainCap) kept.push(it);
+  }
+  return kept;
+}
+
+
