@@ -1,4 +1,4 @@
-// api/events.mjs — 緩めフィルタ + 最終フォールバック（空を返さない）
+// api/events.mjs — 診断版（各段階の件数を返す & 最終フォールバックあり）
 
 function send(res, obj) {
   res.statusCode = 200;
@@ -15,29 +15,30 @@ const SOURCES = [
   'https://www.e-sagamihara.com/event/'
 ];
 
-// 正規化
-function norm(s=''){ return s.toString().normalize('NFKC').toLowerCase(); }
+const GENERIC = ['イベント','体験','ワークショップ','講座','教室','観察','自然','展示','工作','工房','ミッション'];
 
-// 同義語展開（緩め）
+const UA_HEADERS = { 'User-Agent':'Mozilla/5.0', 'Accept-Language':'ja-JP,ja;q=0.9' };
+
+const norm = (s='') => s.toString().normalize('NFKC').toLowerCase();
+
 function expandTerms(qRaw=''){
   const q = norm(qRaw);
   const terms = new Set();
   if(!q) return [];
   terms.add(q);
-
   if(q.includes('苔') || q.includes('こけ') || q.includes('ｺｹ')){
     ['苔','こけ','コケ','苔玉','テラリウム','苔観察','苔の観察','苔庭'].forEach(t=>terms.add(norm(t)));
   }
   if(q.includes('手芸')){
     ['手芸','ハンドメイド','クラフト','刺し子','刺繍','裁縫','ミシン','ビーズ','フェルト','羊毛フェルト','布小物'].forEach(t=>terms.add(norm(t)));
   }
-  if(q.includes('編み') || q.includes('あみ') || q.includes('ニット')){
+  if(q.includes('編み') || q.includes('あみ') || q.includes('ﾆｯﾄ') || q.includes('ニット')){
     ['編み物','かぎ編み','棒針編み','ニット','マフラー','アミグルミ'].forEach(t=>terms.add(norm(t)));
   }
   if(q.includes('木工') || q.includes('木')){
     ['木工','木の工作','DIY','クラフト','木材','工房体験'].forEach(t=>terms.add(norm(t)));
   }
-  if(q.includes('花') || q.includes('フラワー')){
+  if(q.includes('花') || q.includes('ﾌﾗﾜｰ') || q.includes('フラワー')){
     ['花屋','フラワー','ブーケ','アレンジメント','生け花','ドライフラワー'].forEach(t=>terms.add(norm(t)));
   }
   if(q.includes('科学') || q.includes('科学館')){
@@ -46,9 +47,6 @@ function expandTerms(qRaw=''){
   return [...terms];
 }
 
-const GENERIC = ['イベント','体験','ワークショップ','講座','教室','観察','自然','展示','工作','工房','ミッション'];
-
-// 日付抽出（簡易）
 function extractWhen(label='') {
   const s = label.replace(/\s+/g,' ');
   const re1 = /(?:20\d{2}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*[（(][^）)]+[）)])?/g;
@@ -60,16 +58,10 @@ function extractWhen(label='') {
   return '';
 }
 
-// タイトル整形
-function cleanTitle(label=''){
-  return label.replace(/[【】「」『』［］\[\]（）()]/g,' ').replace(/\s+/g,' ').trim();
-}
+const cleanTitle = (label='') =>
+  label.replace(/[【】「」『』［］\[\]（）()]/g,' ').replace(/\s+/g,' ').trim();
 
-// 「イベントっぽい」URL判定（緩め）
-function urlLooksEvent(u=''){
-  const s = u.toLowerCase();
-  return /(event|events|workshop|ws|calendar|katsudou|news|exhibition)/.test(s);
-}
+const urlLooksEvent = (u='') => /(event|events|workshop|ws|calendar|katsudou|news|exhibition)/.test(u.toLowerCase());
 
 export default async function handler(req, res) {
   let url;
@@ -81,7 +73,7 @@ export default async function handler(req, res) {
   const qNorm = norm(qRaw);
   const debug = url.searchParams.get('debug') === '1';
 
-  // --- モック（残す） ---
+  // ---- モック（確認用） ----
   if (mode === 'mock') {
     const LINKS = [
       { url:'https://example.com/koke1', label:'苔の観察ワークショップ（相模原）' },
@@ -98,11 +90,11 @@ export default async function handler(req, res) {
     return send(res, { ok:true, from:'mock', q:qRaw, count:hit.length, sample:hit.slice(0,8) });
   }
 
-  // --- 実サイトからリンク収集 ---
+  // ---- 実サイトからリンク収集 ----
   const links = [];
   for (const src of SOURCES) {
     try {
-      const r = await fetch(src, { headers: { 'User-Agent':'Mozilla/5.0', 'Accept-Language':'ja-JP,ja;q=0.9' }});
+      const r = await fetch(src, { headers: UA_HEADERS });
       const html = await r.text();
       const ms = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis)];
       for (const m of ms) {
@@ -112,32 +104,32 @@ export default async function handler(req, res) {
         let abs = href; try { abs = new URL(href, src).toString(); } catch {}
         links.push({ url:abs, label, labelN:norm(label) });
       }
-    } catch {}
+    } catch {
+      // サイト1つ失敗しても続行
+    }
   }
 
-  // --- フィルタ（段階的に緩める） ---
+  // ---- 段階フィルタ（途中の件数を全部計測） ----
+  const diags = {
+    q: qRaw,
+    total_links: links.length,
+    counts: {}
+  };
+
   const terms = expandTerms(qRaw);
+  let step1 = [];
+  if (terms.length) step1 = links.filter(L => terms.some(t => L.labelN.includes(t)));
+  diags.counts.match_terms = step1.length;
 
-  // 1) 同義語 or 元のq（ラベル）
-  let filtered = [];
-  if (terms.length) filtered = links.filter(L => terms.some(t => L.labelN.includes(t)));
-  if (!filtered.length && qNorm) filtered = links.filter(L => L.labelN.includes(qNorm));
+  let step2 = step1.length ? step1 : (qNorm ? links.filter(L => L.labelN.includes(qNorm)) : []);
+  diags.counts.match_q = step2.length;
 
-  // 2) まだ0なら「イベントっぽい」ラベル or URL
-  if (!filtered.length) {
-    const genN = GENERIC.map(norm);
-    filtered = links.filter(L =>
-      genN.some(g => L.labelN.includes(g)) || urlLooksEvent(L.url)
-    );
-  }
+  const genN = GENERIC.map(norm);
+  let step3 = step2.length ? step2 : links.filter(L => genN.some(g => L.labelN.includes(g)) || urlLooksEvent(L.url));
+  diags.counts.generic_or_url = step3.length;
 
-  // 3) それでも0なら「全部の中から URL がイベントっぽいもの」を上位20件
-  if (!filtered.length) {
-    filtered = links.filter(L => urlLooksEvent(L.url));
-  }
-
-  // 4) 最終フォールバック：本当に0なら「先頭から12件だけ」見せてデバッグ
-  const finalList = filtered.length ? filtered : links.slice(0, 12);
+  let finalList = step3.length ? step3 : links.slice(0, 50); // それでも0なら素の先頭50件
+  diags.counts.finalList = finalList.length;
 
   // 重複 & ドメイン上限
   const byUrl = new Map();
@@ -153,15 +145,15 @@ export default async function handler(req, res) {
     capped.push(L);
     if (capped.length >= 20) break;
   }
+  diags.counts.capped = capped.length;
 
-  // --- mode=links（デバッグ） ---
+  // ---- mode=links（診断表示） ----
   if (mode === 'links') {
     const sample = capped.slice(0,12).map(L => ({ url:L.url, label:L.label }));
-    if (debug) return send(res, { ok:true, q:qRaw, total_links:links.length, count:sample.length, sample });
-    return send(res, { ok:true, count:sample.length, sample });
+    return send(res, { ok:true, ...diags, sample });
   }
 
-  // --- 通常モード：イベント配列に整形 ---
+  // ---- 通常モード：イベント配列に整形 ----
   const events = capped.map(L => ({
     title: cleanTitle(L.label),
     description: '',
@@ -174,6 +166,6 @@ export default async function handler(req, res) {
     url: L.url
   }));
 
-  if (debug) return send(res, { ok:true, q:qRaw, count:events.length, sample:events.slice(0,8) });
+  if (debug) return send(res, { ok:true, ...diags, sample: events.slice(0,8) });
   return send(res, events);
 }
