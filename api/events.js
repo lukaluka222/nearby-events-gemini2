@@ -98,12 +98,17 @@ export default async function handler(req, res) {
       // 失敗しても落とさない
     }
 
-    // 3) 正規化・スコアリング・半径フィルタ
-    const norm = events.map(normalize);
-    const filtered = norm.filter(it =>
-      (it.lat!=null && it.lon!=null) ? km({lat,lon},{lat:it.lat,lon:it.lon}) <= radius : true
-    );
-    const ranked = rerank(filtered, q, { lat, lon });
+    // 3) 正規化 → デデュープ → ドメイン上限 → 半径フィルタ → スコア
+const norm = events.map(normalize);
+
+// ★ここが追加
+const uniq = dedupeAndCap(norm, 3); // 各ドメイン最大3件（必要なら2に）
+
+const filtered = uniq.filter(it =>
+  (it.lat!=null && it.lon!=null) ? km({lat,lon},{lat:it.lat,lon:it.lon}) <= radius : true
+);
+const ranked = rerank(filtered, q, { lat, lon });
+    
 
     // デバッグ要求があれば内部状態も返す（本番ではdebug=1を付けた時だけ）
     if (debug) {
