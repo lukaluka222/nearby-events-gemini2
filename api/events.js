@@ -83,4 +83,182 @@ export default async function handler(req, res) {
           .replace(/<[^>]+>/g, ' ')
           .replace(/\s+/g, ' ')
           .slice(0, 18000);
-        allText += '\n\n' + text
+        allText += '\n\n' + text;
+      } catch (e) {
+        errors.push(`fetch fail: ${src} :: ${e.message}`);
+      }
+    }
+
+    // 2) GeminiでJSON抽出
+    let events = [];
+    try {
+      const m = await getModel();
+      if (m && allText.trim()) {
+        const prompt =
+`あなたはイベント抽出アシスタントです。以下の本文から、
+「相模原市および近隣で、中学生も参加できそうな小規模の体験・ワークショップ・観察・展示」
+に該当する候補を最大10件、JSON配列のみで返してください。
+スキーマ:
+[{"title":"...","description":"...","place":"...","lat":null,"lon":null,"price":null,"when":"...","tags":["..."],"url":"..."}]
+不明は null/空文字。憶測で住所や価格を入れない。
+同一または類似イベントは1件に統合し、同一タイトルでも日時・場所が同じなら1件のみ。
+可能なら「when」に具体的な日付・期間（YYYY-MM-DD 〜）を入れてください。
+キーワード: ${q}
+本文: ${allText}`;
+        const out = await m.generateContent(prompt);
+        const txt = out.response.text();
+        const s = txt.indexOf('['), e = txt.lastIndexOf(']') + 1;
+        if (s >= 0 && e > s) {
+          events = JSON.parse(txt.slice(s, e));
+        } else {
+          errors.push('gemini: no JSON block');
+        }
+      } else {
+        errors.push('gemini: no key or empty text');
+      }
+    } catch (e) {
+      errors.push('gemini parse: ' + e.message);
+    }
+
+    // 2.5) ゼロ件 → リンクfallback（q必須）
+    if (!events.length && allLinks.length) {
+      const fb = fallbackFromLinks(allLinks, q);
+      if (fb.length) {
+        events = fb;
+        errors.push(`fallback: links -> ${fb.length}`);
+      }
+    }
+
+    // mode=links（リンクだけ見たいテスト）
+    if (mode === 'links') {
+      const fb = fallbackFromLinks(allLinks, q);
+      if (debug) {
+        return res.status(200).json({ ok: true, from: 'links-only', count: fb.length, sample: fb.slice(0,5), errors });
+      }
+      return res.status(200).json(fb);
+    }
+
+    // 3) 正規化 → デデュープ（各ドメイン1件）→ シャッフル → 半径フィルタ → スコア
+    const norm = events.map(normalize);
+    const uniq = dedupeAndCap(norm, 1);           // ← “毎回同じ面子”防止に 1 件/ドメイン
+    uniq.sort(() => Math.random() - 0.5);         // ばらけ
+
+    const filtered = uniq.filter(it =>
+      (it.lat!=null && it.lon!=null) ? km({lat,lon},{lat:it.lat,lon:it.lon}) <= radius : true
+    );
+    const ranked = rerank(filtered, q, { lat, lon });
+
+    if (debug) {
+      return res.status(200).json({ ok: true, count: ranked.length, errors, sample: ranked.slice(0,3) });
+    }
+    return res.status(200).json(ranked);
+
+  } catch (e) {
+    if (debug) {
+      return res.status(200).json({ ok: false, errors: [`fatal: ${e.message}`] });
+    }
+    return res.status(200).json([]);
+  }
+}
+
+// ===== ユーティリティ =====
+function normalize(e) {
+  return {
+    title: e?.title?.toString().trim() || '',
+    description: e?.description?.toString().trim() || '',
+    place: e?.place?.toString().trim() || '',
+    lat: (typeof e?.lat === 'number') ? e.lat : null,
+    lon: (typeof e?.lon === 'number') ? e.lon : null,
+    price: (typeof e?.price === 'number') ? e.price : null,
+    when: e?.when?.toString().trim() || '',
+    tags: Array.isArray(e?.tags) ? e.tags.slice(0,8).map(t=>t.toString()) : [],
+    url: e?.url?.toString() || ''
+  };
+}
+function km(a, b) {
+  const R = 6371, toRad = d => d*Math.PI/180;
+  const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+  const la = toRad(a.lat), lb = toRad(b.lat);
+  const h = Math.sin(dLat/2)**2 + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(h), Math.sqrt(1-h));
+}
+function rerank(items, q, origin) {
+  const norm = s => (s||'').toString().toLowerCase();
+  const qq = norm(q);
+  return items.map(it => {
+    const hasPos = (it.lat!=null && it.lon!=null);
+    const d = hasPos ? km(origin, { lat: it.lat, lon: it.lon }) : 99;
+    let s = 0;
+    if (d <= 3) s += 15; else if (d <= 5) s += 10; else if (d <= 10) s += 6; else s += 2;
+
+    if (qq) {
+      const titleHit = norm(it.title).includes(qq);
+      const textHit  = norm((it.tags||[]).join(' ') + ' ' + (it.description||'')).includes(qq);
+      if (titleHit) s += 18; else if (textHit) s += 10;
+    }
+    return { ...it, score: s, distance_km: hasPos ? Number(d.toFixed(1)) : null };
+  }).sort((a,b) => (b.score||0)-(a.score||0)).slice(0, 20);
+}
+function canonicalTitle(s=''){
+  return s.toString().replace(/[【】「」『』［］（）()［］]/g,' ')
+    .replace(/\s+/g,' ').trim().toLowerCase();
+}
+function canonicalWhen(s=''){
+  return s.toString().replace(/\s+/g,' ').trim().toLowerCase();
+}
+function hostOf(u=''){
+  try{ return new URL(u).host.replace(/^www\./,''); }catch{ return ''; }
+}
+function makeKey(e){
+  return [
+    canonicalTitle(e.title||''),
+    (e.place||'').trim().toLowerCase(),
+    canonicalWhen(e.when||'')
+  ].join('@');
+}
+function dedupeAndCap(items, perDomainCap=3){
+  const byKey = new Map();
+  for(const it of items){
+    const key = makeKey(it);
+    if(!byKey.has(key)) byKey.set(key, it);
+  }
+  const deduped = [...byKey.values()];
+  const domainCount = {};
+  const kept = [];
+  for(const it of deduped){
+    const h = hostOf(it.url||'');
+    domainCount[h] = (domainCount[h]||0) + 1;
+    if(!h || domainCount[h] <= perDomainCap) kept.push(it);
+  }
+  return kept;
+}
+// q必須のリンクfallback
+function fallbackFromLinks(links, q) {
+  const norm = s => (s||'').toString().toLowerCase().normalize('NFKC');
+  const qq = norm(q).trim();
+  const GENERIC = ["イベント","体験","ワークショップ","講座","展","観望","工作","教室"];
+  const perDomainCap = 2;
+  const domainCount = {};
+  const out = [];
+  for (const L of links) {
+    const label = (L.label||'').trim();
+    const labN  = norm(label);
+    if (qq) {
+      if (!labN.includes(qq)) continue;   // ★ qがある時はq必須
+    } else {
+      if (!GENERIC.some(w => label.includes(w))) continue;
+    }
+    domainCount[L.host] = (domainCount[L.host] || 0) + 1;
+    if (domainCount[L.host] > perDomainCap) continue;
+    out.push({
+      title: label.slice(0, 80),
+      description: "",
+      place: "",
+      lat: null, lon: null, price: null, when: "",
+      tags: qq ? [q] : [],
+      url: L.url
+    });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
