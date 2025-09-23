@@ -14,13 +14,14 @@ async function getModel() {
 
 // まずは “情報が載ってる固定URL” に絞る（増やすのは後でOK）
 const SOURCES = [
-  "https://www.city.sagamihara.kanagawa.jp/event_calendar.html",
-  "https://sagamiharacitymuseum.jp/event/",
-  "https://sagamiharacitymuseum.jp/eventnews/",
-  "https://sagamiharacitymuseum.jp/event/exhibition/",
-  "https://sagamigawa-fureai.com/",
-  "https://www.city.sagamihara.kanagawa.jp/kankou/1026674/hayabusa2/1033156.html"
+  "https://www.city.sagamihara.kanagawa.jp/event_calendar.html",               // 市公式カレンダー（横断） :contentReference[oaicite:0]{index=0}
+  "https://sagamiharacitymuseum.jp/event/",                                   // 市立博物館：イベント一覧 :contentReference[oaicite:1]{index=1}
+  "https://sagamiharacitymuseum.jp/eventnews/",                               // 市立博物館：イベントニュース :contentReference[oaicite:2]{index=2}
+  "https://sagamigawa-fureai.com/",                                           // 相模川ふれあい科学館（解説・WS） :contentReference[oaicite:3]{index=3}
+  "https://fujino-art.jp/workshop/",                                          // 藤野芸術の家：工房体験＆WS（通年/予約可） :contentReference[oaicite:4]{index=4}
+  "https://www.e-sagamihara.com/event/"                                       // 観光協会：おすすめイベント（季節） :contentReference[oaicite:5]{index=5}
 ];
+
 
 const prompt =
 `あなたはイベント抽出アシスタントです。以下の本文から、
