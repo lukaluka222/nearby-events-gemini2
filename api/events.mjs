@@ -1,3 +1,4 @@
+// api/events.mjs — モック専用（q に反応）
 function send(res, obj) {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -11,6 +12,7 @@ export default function handler(req, res) {
   } catch {
     return send(res, { ok: true, note: 'URL parse failed', items: [] });
   }
+
   const mode = url.searchParams.get('mode') || '';
   const q = (url.searchParams.get('q') || '').toLowerCase();
 
@@ -27,5 +29,6 @@ export default function handler(req, res) {
     return send(res, { ok: true, from: 'mock', q, count: hit.length, sample: hit.slice(0, 5) });
   }
 
+  // mode=mock 以外は説明だけ返す（今はモック確認用）
   return send(res, { ok: true, note: 'normal mode (mock only build)', items: [] });
 }
