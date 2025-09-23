@@ -23,19 +23,6 @@ const SOURCES = [
 ];
 
 
-const prompt =
-`あなたはイベント抽出アシスタントです。以下の本文から、
-「相模原市および近隣で、中学生も参加できそうな小規模の体験・ワークショップ・観察・展示」
-に該当する候補を最大10件、JSON配列のみで返してください。
-スキーマ:
-[{"title":"...","description":"...","place":"...","lat":null,"lon":null,"price":null,"when":"...","tags":["..."],"url":"..."}]
-不明は null/空文字。憶測で住所や価格を入れない。
-同一または類似イベントは1件に統合し、同一タイトルでも日時・場所が同じなら1件のみ。
-可能なら「when」に具体的な日付・期間（YYYY-MM-DD 〜）を入れてください。
-キーワード: ${q}
-本文: ${allText}`;
-
-
 
 export default async function handler(req, res) {
   const url = new URL(req.url, `https://${req.headers.host}`);
@@ -67,37 +54,39 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2) GeminiでJSON抽出（キーが無ければ空配列）
-    let events = [];
-    try {
-      const m = await getModel();
-      if (m && allText.trim()) {
-        const prompt =
+// 2) GeminiでJSON抽出（キーが無ければ空配列）
+let events = [];
+try {
+  const m = await getModel();
+  if (m && allText.trim()) {
+    const prompt =
 `あなたはイベント抽出アシスタントです。以下の本文から、
 「相模原市および近隣で、中学生も参加できそうな小規模の体験・ワークショップ・観察・展示」
 に該当する候補を最大10件、JSON配列のみで返してください。
 スキーマ:
 [{"title":"...","description":"...","place":"...","lat":null,"lon":null,"price":null,"when":"...","tags":["..."],"url":"..."}]
 不明は null/空文字。憶測で住所や価格を入れない。
+同一または類似イベントは1件に統合し、同一タイトルでも日時・場所が同じなら1件のみ。
+可能なら「when」に具体的な日付・期間（YYYY-MM-DD 〜）を入れてください。
 キーワード: ${q}
 本文: ${allText}`;
 
-        const out = await m.generateContent(prompt);
-        const txt = out.response.text();
-        // JSONだけを切り出してパース
-        const s = txt.indexOf('['), e = txt.lastIndexOf(']') + 1;
-        if (s >= 0 && e > s) {
-          events = JSON.parse(txt.slice(s, e));
-        } else {
-          errors.push('gemini: no JSON block');
-        }
-      } else {
-        errors.push('gemini: no key or empty text');
-      }
-    } catch (e) {
-      errors.push('gemini parse: ' + e.message);
-      // 失敗しても落とさない
+    const out = await m.generateContent(prompt);
+    const txt = out.response.text();
+    const s = txt.indexOf('['), e = txt.lastIndexOf(']') + 1;
+    if (s >= 0 && e > s) {
+      events = JSON.parse(txt.slice(s, e));
+    } else {
+      errors.push('gemini: no JSON block');
     }
+  } else {
+    errors.push('gemini: no key or empty text');
+  }
+} catch (e) {
+  errors.push('gemini parse: ' + e.message);
+}
+
+    
 
     // 3) 正規化 → デデュープ → ドメイン上限 → 半径フィルタ → スコア
 const norm = events.map(normalize);
