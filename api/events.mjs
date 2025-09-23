@@ -1,122 +1,133 @@
-// api/events.mjs — links モード改良：q未ヒットなら汎用イベント語でフォールバック + debug出力
+// api/events.mjs — リンク抽出→イベント配列に整形（簡易 when 抽出付き）
+// ESM 版（export default）。fetch は Node18+ で標準。
+
 function send(res, obj) {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(obj));
 }
 
-// まずは “一覧ページ直” を中心に（リンク抽出が効きやすい）
 const SOURCES = [
-  'https://www.city.sagamihara.kanagawa.jp/event_calendar.html', // 市公式カレンダー
-  'https://sagamiharacitymuseum.jp/event/',                      // 市立博物館：イベント一覧
-  'https://sagamiharacitymuseum.jp/eventnews/',                  // 市立博物館：イベントニュース
-  'https://sagamigawa-fureai.com/',                              // ふれあい科学館
-  'https://fujino-art.jp/workshop/',                             // 藤野芸術の家：工房体験
-  'https://www.e-sagamihara.com/event/'                          // 観光協会
+  'https://www.city.sagamihara.kanagawa.jp/event_calendar.html',
+  'https://sagamiharacitymuseum.jp/event/',
+  'https://sagamiharacitymuseum.jp/eventnews/',
+  'https://sagamigawa-fureai.com/',
+  'https://fujino-art.jp/workshop/',
+  'https://www.e-sagamihara.com/event/'
 ];
 
-// 「苔/コケ/こけ」等のゆらぎ吸収 + 全角半角/小文字化
+// ひら/カナのゆらぎ軽減
 function norm(s=''){
-  return s
-    .toString()
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/こけ|ｺｹ/g, '苔'); // ひら/半角ｶﾅを苔に寄せる（簡易）
+  return s.toString().normalize('NFKC').toLowerCase().replace(/こけ|ｺｹ/g,'苔');
 }
 
-const GENERIC_WORDS = ['イベント','体験','ワークショップ','講座','教室','観察','自然','展示','工作','工房','ミッション'];
+// タイトルから日付区間っぽい文字列を抜く（超簡易）
+function extractWhen(label) {
+  const s = label.replace(/\s+/g,' ');
+  // 例：2025年9月/9月/9/24/ など
+  const re1 = /((20\d{2})?年?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*[（(][^）)]+[）)])?)/g;
+  const re2 = /(\d{1,2}\/\d{1,2}(?:\s*[-〜～]\s*\d{1,2}\/\d{1,2})?)/g;
+  const re3 = /(\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?(?:\s*[-〜～]\s*\d{1,2}\s*月?\s*\d{0,2}\s*日?)?)/g;
+
+  let m = s.match(re1); if (m && m.join('').trim()) return m.join(' / ');
+  m = s.match(re2); if (m && m.join('').trim()) return m.join(' / ');
+  m = s.match(re3); if (m && m.join('').trim()) return m.join(' / ');
+  return '';
+}
+
+// ラベルを軽く整形（【】や全角スペースの整理）
+function cleanTitle(label=''){
+  return label
+    .replace(/[【】「」『』［］\[\]（）()]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
 
 export default async function handler(req, res) {
-  let url;
-  try { url = new URL(req.url, `https://${req.headers.host || 'example.com'}`); }
-  catch { return send(res, { ok: true, note: 'URL parse failed', items: [] }); }
+  let url; try { url = new URL(req.url, `https://${req.headers.host || 'example.com'}`); }
+  catch { return send(res, { ok:true, note:'URL parse failed', items:[] }); }
 
   const mode  = url.searchParams.get('mode') || '';
   const qRaw  = url.searchParams.get('q') || '';
   const q     = norm(qRaw);
   const debug = url.searchParams.get('debug') === '1';
 
-  // --- 既存のモックは残す ---
+  // 既存のモックは残す
   if (mode === 'mock') {
     const LINKS = [
-      { url: 'https://example.com/koke1', label: '苔の観察ワークショップ（相模原）' },
-      { url: 'https://example.com/koke2', label: '川辺でコケ観察ミッション' },
-      { url: 'https://example.com/tegei1', label: '手芸（刺し子）はじめて教室' },
-      { url: 'https://example.com/ami1',  label: '編み物ミニワークショップ' },
-      { url: 'https://example.com/mokko', label: '木工フリーワーク' },
-      { url: 'https://example.com/hanaya',label: '花屋のミニブーケづくり体験' }
+      { url:'https://example.com/koke1', label:'苔の観察ワークショップ（相模原）' },
+      { url:'https://example.com/koke2', label:'川辺でコケ観察ミッション' },
+      { url:'https://example.com/tegei1', label:'手芸（刺し子）はじめて教室' },
+      { url:'https://example.com/ami1',  label:'編み物ミニワークショップ' },
+      { url:'https://example.com/mokko', label:'木工フリーワーク' },
+      { url:'https://example.com/hanaya',label:'花屋のミニブーケづくり体験' }
     ];
     const hit = q ? LINKS.filter(x => norm(x.label).includes(q)) : LINKS;
     return send(res, { ok:true, from:'mock', q:qRaw, count:hit.length, sample:hit.slice(0,8) });
   }
 
-  // --- 実サイトからリンク抽出 ---
+  // 実サイトからリンク収集
   const links = [];
   for (const src of SOURCES) {
     try {
       const r = await fetch(src, {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ja-JP,ja;q=0.9' }
+        headers: { 'User-Agent':'Mozilla/5.0', 'Accept-Language':'ja-JP,ja;q=0.9' }
       });
       const html = await r.text();
       const ms = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis)];
       for (const m of ms) {
         const href  = m[1];
-        const label = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        const label = m[2].replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
         if (!label || label.length < 3) continue;
-        let abs = href;
-        try { abs = new URL(href, src).toString(); } catch {}
-        links.push({ url: abs, label, labelN: norm(label) });
+        let abs = href; try { abs = new URL(href, src).toString(); } catch {}
+        links.push({ url:abs, label, labelN:norm(label) });
       }
-    } catch (e) {
-      // 1サイト失敗しても続行
-    }
+    } catch {}
   }
 
-  // 1) まずは q に一致
-  let filtered = q ? links.filter(L => L.labelN.includes(q)) : [];
-
-  // 2) q がなくて0件、または q があっても0件 → 汎用イベント語で拾う
-  if (filtered.length === 0) {
-    filtered = links.filter(L => GENERIC_WORDS.some(w => L.label.includes(w)));
+  // mode=links はデバッグ用に生リンクの一部を返す
+  if (mode === 'links') {
+    const GENERIC = /(イベント|体験|ワークショップ|講座|教室|観察|自然|展示|工作|工房|ミッション)/;
+    const filtered = q
+      ? links.filter(L => L.labelN.includes(q))
+      : links.filter(L => GENERIC.test(L.label));
+    const sample = filtered.slice(0, 12).map(L => ({ url:L.url, label:L.label }));
+    return send(res, { ok:true, q:qRaw, total_links:links.length, count:sample.length, sample });
   }
 
-  // 3) 取りすぎ回避：同一ドメイン上限 & 重複簡易除去
-  const byUrl = new Map();
+  // 通常モード：リンク → 簡易イベント配列に整形
+  // 1) q に一致 or 汎用語ヒット
+  const GENERIC = /(イベント|体験|ワークショップ|講座|教室|観察|自然|展示|工作|工房|ミッション)/;
+  let picked = q ? links.filter(L => L.labelN.includes(q)) : links.filter(L => GENERIC.test(L.label));
+
+  // 2) ドメイン上限 & 重複除去
   const perDomainCap = 4;
   const domainCount = {};
-  const out = [];
-  for (const L of filtered) {
+  const byUrl = new Map();
+  const kept = [];
+  for (const L of picked) {
     if (byUrl.has(L.url)) continue;
     byUrl.set(L.url, true);
-    let host = '';
-    try { host = new URL(L.url).host.replace(/^www\./,''); } catch {}
+    let host = ''; try { host = new URL(L.url).host.replace(/^www\./,''); } catch {}
     domainCount[host] = (domainCount[host] || 0) + 1;
     if (host && domainCount[host] > perDomainCap) continue;
-    out.push({ url: L.url, label: L.label });
-    if (out.length >= 20) break;
+    kept.push(L);
+    if (kept.length >= 20) break;
   }
 
-  if (mode === 'links') {
-    if (debug) {
-      // デバッグ用に、最初に拾えた生リンクも少し見せる
-      return send(res, { ok:true, q:qRaw, total_links:links.length, count:out.length, sample:out.slice(0,12) });
-    }
-    return send(res, { ok:true, count: out.length, sample: out.slice(0,12) });
-  }
-
-  // 通常モード：とりあえずイベント配列の形に整形して返す（まだラベルとURLのみ）
-  const events = out.map(L => ({
-    title: L.label,
+  // 3) イベント形に変換（when をタイトルから推定）
+  const events = kept.map(L => ({
+    title: cleanTitle(L.label),
     description: '',
     place: '',
     lat: null,
     lon: null,
     price: null,
-    when: '',
+    when: extractWhen(L.label),
     tags: qRaw ? [qRaw] : [],
     url: L.url
   }));
 
-  if (debug) return send(res, { ok:true, count: events.length, sample: events.slice(0,8) });
+  if (debug) return send(res, { ok:true, count:events.length, sample:events.slice(0,8) });
   return send(res, events);
 }
