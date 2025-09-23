@@ -1,21 +1,29 @@
-// api/events.mjs — モック専用（q に反応）
+// api/events.mjs — links モード追加（ESM）
 function send(res, obj) {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(obj));
 }
 
-export default function handler(req, res) {
+// まずは “一覧ページ直” を中心に（リンク抽出が効きやすい）
+const SOURCES = [
+  'https://www.city.sagamihara.kanagawa.jp/event_calendar.html', // 市公式カレンダー
+  'https://sagamiharacitymuseum.jp/event/',                      // 市立博物館：イベント一覧
+  'https://sagamiharacitymuseum.jp/eventnews/',                  // 市立博物館：イベントニュース
+  'https://sagamigawa-fureai.com/',                              // ふれあい科学館
+  'https://fujino-art.jp/workshop/',                             // 藤野芸術の家：工房体験
+  'https://www.e-sagamihara.com/event/'                          // 観光協会
+];
+
+export default async function handler(req, res) {
   let url;
-  try {
-    url = new URL(req.url, `https://${req.headers.host || 'example.com'}`);
-  } catch {
-    return send(res, { ok: true, note: 'URL parse failed', items: [] });
-  }
+  try { url = new URL(req.url, `https://${req.headers.host || 'example.com'}`); }
+  catch { return send(res, { ok: true, note: 'URL parse failed', items: [] }); }
 
   const mode = url.searchParams.get('mode') || '';
   const q = (url.searchParams.get('q') || '').toLowerCase();
 
+  // ① まずは既に動いた “モック” も残す
   if (mode === 'mock') {
     const LINKS = [
       { url: 'https://example.com/koke1', label: '苔の観察ワークショップ（相模原）' },
@@ -29,6 +37,33 @@ export default function handler(req, res) {
     return send(res, { ok: true, from: 'mock', q, count: hit.length, sample: hit.slice(0, 5) });
   }
 
-  // mode=mock 以外は説明だけ返す（今はモック確認用）
-  return send(res, { ok: true, note: 'normal mode (mock only build)', items: [] });
+  // ② 新規：実サイトからリンク抽出
+  if (mode === 'links') {
+    const links = [];
+    for (const src of SOURCES) {
+      try {
+        const r = await fetch(src, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ja-JP,ja;q=0.9' }
+        });
+        const html = await r.text();
+        const ms = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis)];
+        for (const m of ms) {
+          const href  = m[1];
+          const label = m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (!label || label.length < 4) continue;
+          let abs = href;
+          try { abs = new URL(href, src).toString(); } catch {}
+          links.push({ url: abs, label });
+        }
+      } catch (e) {
+        // 取れないサイトがあっても続行
+      }
+    }
+    const filtered = q ? links.filter(L => L.label.toLowerCase().includes(q)) : links;
+    // まずは確認しやすいように sample を返す
+    return send(res, { ok: true, count: filtered.length, sample: filtered.slice(0, 12) });
+  }
+
+  // ③ 通常（まだ空）→ 次のステップで中身を実装
+  return send(res, { ok: true, note: 'normal mode (links/mock available)', items: [] });
 }
