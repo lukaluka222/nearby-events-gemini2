@@ -98,8 +98,23 @@ const filtered = uniq.filter(it =>
   (it.lat!=null && it.lon!=null) ? km({lat,lon},{lat:it.lat,lon:it.lon}) <= radius : true
 );
 const ranked = rerank(filtered, q, { lat, lon });
-    
 
+    
+// ranked を作った直後（debug返却の前）に追加
+if (!ranked.length) {
+  return res.status(200).json([{
+    title: "（APIフォールバック）相模川 こけ観察ミッション",
+    description: "石の裏や日陰で観察。写真と観察ノートに残そう。",
+    place: "新磯〜高田橋の河原",
+    lat: 35.5416, lon: 139.3608,
+    price: 0, when: "晴れの日の午後30〜60分",
+    tags: ["苔","自然観察","屋外","短時間OK"],
+    url: "https://www.google.com/search?q=%E7%9B%B8%E6%A8%A1%E5%8E%9F%20%E8%8B%94%20%E8%A6%B3%E5%AF%9F"],
+    score: 20, distance_km: 3.2
+  }]);
+}
+
+    
     // デバッグ要求があれば内部状態も返す（本番ではdebug=1を付けた時だけ）
     if (debug) {
       return res.status(200).json({ ok: true, count: ranked.length, errors, sample: ranked.slice(0,3) });
@@ -173,6 +188,8 @@ function makeKey(e){
     canonicalWhen(e.when||'')
   ].join('@');
 }
+
+
 
 // デデュープ＋ドメイン上限（例：各ドメイン最大3件）
 function dedupeAndCap(items, perDomainCap=3){
