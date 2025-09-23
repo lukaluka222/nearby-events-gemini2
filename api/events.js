@@ -1,19 +1,26 @@
-// api/events.js  — Vercel(Node18)向け CommonJS 版
-// 1) SOURCESからHTML取得 → 2) （あれば）Gemini抽出 → 3) だめならリンクfallback（q必須）
-// 4) 正規化・デデュープ・半径フィルタ・スコア → JSON
+// api/events.js — Vercel(Node.js) Serverless Function (CommonJS)
+// res.status(200).json(...) は使わず、statusCode + setHeader + end で返却
 
+// ---------- 小ユーティリティ ----------
+function send(res, status, obj) {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(obj));
+}
+
+// ---------- Gemini ----------
 let model = null;
 async function getModel() {
   if (!process.env.GEMINI_API_KEY) return null;
   if (model) return model;
-  // CommonJS でも動くように dynamic import を使用
+  // dynamic import（CommonJSでもOK）
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
   return model;
 }
 
-// ★ 一覧“直”URLにしておくとリンク抽出が効きやすい
+// ---------- ソース候補（一覧直URLだと当たりやすい） ----------
 const SOURCES = [
   "https://www.city.sagamihara.kanagawa.jp/event_calendar.html",
   "https://sagamiharacitymuseum.jp/event/",
@@ -23,21 +30,20 @@ const SOURCES = [
   "https://www.e-sagamihara.com/event/"
 ];
 
+// ---------- メイン ----------
 module.exports = async (req, res) => {
-  // URL パース（Node18）
   const url = new URL(req.url, `https://${req.headers.host}`);
   const q   = url.searchParams.get('q') || '';
   const lat = Number(url.searchParams.get('lat') || '35.5710');
   const lon = Number(url.searchParams.get('lon') || '139.3707');
   const radius = Math.min(Number(url.searchParams.get('radius') || '8'), 30);
   const debug = url.searchParams.get('debug') === '1';
-  const fresh = url.searchParams.get('fresh') === '1'; // （今は未使用でもOK）
-  const mode  = url.searchParams.get('mode') || '';    // links / mock / （空=通常）
+  const mode  = url.searchParams.get('mode') || ''; // mock / links / (通常)
 
   const errors = [];
 
   try {
-    // --- 開発用モック：qで結果が変わるか即確認 ---
+    // ---- 開発用モック（まずはこれで q に反応するか確認） ----
     if (mode === 'mock') {
       const MOCK_LINKS = [
         { url:"https://example.com/koke1", label:"苔の観察ワークショップ（相模原市内）", host:"example.com" },
@@ -48,11 +54,11 @@ module.exports = async (req, res) => {
         { url:"https://example.com/hanaya",label:"花屋のミニブーケづくり体験", host:"example.com" },
       ];
       const items = fallbackFromLinks(MOCK_LINKS, q);
-      if (debug) return res.status(200).json({ ok:true, from:"mock", q, count:items.length, sample:items.slice(0,5) });
-      return res.status(200).json(items);
+      if (debug) return send(res, 200, { ok:true, from:"mock", q, count:items.length, sample:items.slice(0,5) });
+      return send(res, 200, items);
     }
 
-    // 1) 収集：各ページを取りにいって、リンクと本文テキストを作る
+    // ---- 1) 収集：各ページからリンク＆本文テキスト ----
     let allText = '';
     let allLinks = [];
 
@@ -66,7 +72,7 @@ module.exports = async (req, res) => {
         });
         const html = await r.text();
 
-        // aタグからリンクとラベル収集
+        // aタグ収集
         const linkMatches = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis)];
         for (const m of linkMatches) {
           const href  = m[1];
@@ -79,7 +85,7 @@ module.exports = async (req, res) => {
           allLinks.push({ url: abs, label, host });
         }
 
-        // プレーンテキスト化（超簡易）
+        // 超簡易テキスト化
         const text = html
           .replace(/<script[^>]*>.*?<\/script>/gis, ' ')
           .replace(/<style[^>]*>.*?<\/style>/gis, ' ')
@@ -92,7 +98,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // 2) GeminiでイベントJSON抽出（キーがあれば）
+    // ---- 2) GeminiでイベントJSON抽出（あれば） ----
     let events = [];
     try {
       const m = await getModel();
@@ -108,7 +114,6 @@ module.exports = async (req, res) => {
 可能なら「when」に具体的な日付・期間（YYYY-MM-DD 〜）を入れてください。
 キーワード: ${q}
 本文: ${allText}`;
-
         const out = await m.generateContent(prompt);
         const txt = out.response.text();
         const s = txt.indexOf('['), e = txt.lastIndexOf(']') + 1;
@@ -121,11 +126,10 @@ module.exports = async (req, res) => {
         errors.push('gemini: no key or empty text');
       }
     } catch (e) {
-      // Gemini無くても落とさない
       errors.push('gemini parse: ' + e.message);
     }
 
-    // 2.5) 0件ならリンクfallback（★qを必須にする）
+    // ---- 2.5) 0件ならリンクfallback（q必須） ----
     if (!events.length && allLinks.length) {
       const fb = fallbackFromLinks(allLinks, q);
       if (fb.length) {
@@ -134,33 +138,33 @@ module.exports = async (req, res) => {
       }
     }
 
-    // mode=links（リンクのみの確認用）
+    // ---- mode=links：リンクのみ返すテスト ----
     if (mode === 'links') {
       const fb = fallbackFromLinks(allLinks, q);
-      if (debug) return res.status(200).json({ ok:true, from:'links-only', count:fb.length, sample:fb.slice(0,5), errors });
-      return res.status(200).json(fb);
+      if (debug) return send(res, 200, { ok:true, from:'links-only', count:fb.length, sample:fb.slice(0,5), errors });
+      return send(res, 200, fb);
     }
 
-    // 3) 正規化 → デデュープ（各ドメイン1件）→ シャッフル → 半径フィルタ → スコア
+    // ---- 3) 正規化 → デデュープ（各ドメイン1件）→ シャッフル → 半径フィルタ → スコア ----
     const norm = events.map(normalize);
-    const uniq = dedupeAndCap(norm, 1);           // ← “毎回同じ面子”防止に1件/ドメイン
-    uniq.sort(() => Math.random() - 0.5);         // ばらけ
+    const uniq = dedupeAndCap(norm, 1);
+    uniq.sort(() => Math.random() - 0.5);
 
     const filtered = uniq.filter(it =>
       (it.lat!=null && it.lon!=null) ? km({lat,lon},{lat:it.lat,lon:it.lon}) <= radius : true
     );
     const ranked = rerank(filtered, q, { lat, lon });
 
-    if (debug) return res.status(200).json({ ok:true, count: ranked.length, errors, sample: ranked.slice(0,3) });
-    return res.status(200).json(ranked);
+    if (debug) return send(res, 200, { ok:true, count: ranked.length, errors, sample: ranked.slice(0,3) });
+    return send(res, 200, ranked);
 
   } catch (e) {
-    if (debug) return res.status(200).json({ ok:false, errors: [`fatal: ${e.message}`] });
-    return res.status(200).json([]);
+    if (debug) return send(res, 200, { ok:false, errors:[`fatal: ${e.message}`] });
+    return send(res, 200, []);
   }
 };
 
-// ===== ユーティリティ =====
+// ---------- ユーティリティ ----------
 function normalize(e) {
   return {
     title: e?.title?.toString().trim() || '',
@@ -178,7 +182,7 @@ function km(a, b) {
   const R = 6371, toRad = d => d*Math.PI/180;
   const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
   const la = toRad(a.lat), lb = toRad(b.lat);
-  const h = Math.sin(dLat/2)**2 + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
+  const h=Math.sin(dLat/2)**2 + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
   return R*2*Math.atan2(Math.sqrt(h), Math.sqrt(1-h));
 }
 function rerank(items, q, origin) {
@@ -199,8 +203,11 @@ function rerank(items, q, origin) {
   }).sort((a,b) => (b.score||0)-(a.score||0)).slice(0, 20);
 }
 function canonicalTitle(s=''){
-  return s.toString().replace(/[【】「」『』［］（）()［］]/g,' ')
-    .replace(/\s+/g,' ').trim().toLowerCase();
+  return s.toString()
+    .replace(/[【】「」『』［］（）()［］]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim()
+    .toLowerCase();
 }
 function canonicalWhen(s=''){
   return s.toString().replace(/\s+/g,' ').trim().toLowerCase();
@@ -231,7 +238,7 @@ function dedupeAndCap(items, perDomainCap=3){
   }
   return kept;
 }
-// ★ q を必須にするリンクfallback
+// q 必須のリンクfallback
 function fallbackFromLinks(links, q) {
   const norm = s => (s||'').toString().toLowerCase().normalize('NFKC');
   const qq = norm(q).trim();
@@ -243,7 +250,7 @@ function fallbackFromLinks(links, q) {
     const label = (L.label||'').trim();
     const labN  = norm(label);
     if (qq) {
-      if (!labN.includes(qq)) continue;   // q がある時は q 必須
+      if (!labN.includes(qq)) continue; // q がある時は q を含むものだけ
     } else {
       if (!GENERIC.some(w => label.includes(w))) continue;
     }
@@ -261,4 +268,3 @@ function fallbackFromLinks(links, q) {
   }
   return out;
 }
-
