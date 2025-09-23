@@ -72,18 +72,13 @@
     <div class="sources" id="sources"></div>
   </footer>
 
-<script>
-/**
- * スマホ1画面MVP
- * - プロフィール入力なし
- * - キーワード＋現在地から「手元データ」をスコアリング表示
- * - 将来：GeminiでWebから拾った候補を addFromGemini() に流し込む
- */
+  
 
+<script>
 // よく使うキーワード（チップ）
 const PRESETS = ["苔","手芸","編み物","木工","花屋","科学館","ガラス","竹細工","自然観察"];
 
-// サンプル候補（最初は手書きでOK。後でGeminiの結果をここにpush）
+// サンプル候補（フォールバック用）
 const CATALOG = [
   {title:"ふじのアート工房 木工フリーワーク", tags:["木工","初心者OK","屋内","小規模"], place:"相模原市緑区", lat:35.5816, lon:139.2065, price:1000, when:"土日中心（要予約）", url:"https://www.google.com/search?q=%E3%81%B5%E3%81%98%E3%81%AE%E3%82%A2%E3%83%BC%E3%83%88%E5%B7%A5%E6%88%BF+%E4%BD%93%E9%A8%93"},
   {title:"相模川ふれあい科学館 かんたん工作", tags:["科学館","初心者OK","屋内"], place:"相模原市緑区", lat:35.5924, lon:139.3189, price:500, when:"平日午後/週末", url:"https://www.google.com/search?q=%E7%9B%B8%E6%A8%A1%E5%B7%9D%E3%81%B5%E3%82%8C%E3%81%82%E3%81%84%E7%A7%91%E5%AD%A6%E9%A4%A8+%E5%B7%A5%E4%BD%9C"},
@@ -94,22 +89,21 @@ const CATALOG = [
 ];
 
 // 位置取得と表示
-const locEl=document.getElementById('loc');
-let LOC={lat:35.5710, lon:139.3707}; // 相模原駅あたりを初期値
-
-function updateLocLabel(){locEl.textContent=`${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)}`}
+const locEl = document.getElementById('loc');
+let LOC = { lat:35.5710, lon:139.3707 }; // 相模原駅あたりを初期値
+function updateLocLabel(){ locEl.textContent = `${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)}` }
 updateLocLabel();
 
-// Haversine（距離km）
+// 距離計算
 function dist(a,b){
-  const R=6371; const toRad=d=>d*Math.PI/180;
+  const R=6371, toRad=d=>d*Math.PI/180;
   const dLat=toRad(b.lat-a.lat), dLon=toRad(b.lon-a.lon);
   const la=toRad(a.lat), lb=toRad(b.lat);
   const h=Math.sin(dLat/2)**2 + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
   return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));
 }
 
-// スコアリング（超シンプル）：距離＋タグ一致
+// スコア
 function score(item, q){
   const d = dist(LOC,{lat:item.lat,lon:item.lon});
   let s = 0;
@@ -129,159 +123,27 @@ function render(items){
   if(!items.length){ empty.style.display='block'; return; }
   empty.style.display='none';
   items.forEach(({it,meta})=>{
-    const tags = it.tags.map(t=>`<span class="tag">${t}</span>`).join('');
+    const tags = (it.tags||[]).map(t=>`<span class="tag">${t}</span>`).join('');
     const el=document.createElement('article'); el.className='card';
     el.innerHTML = `
       <div class="ph"></div>
       <div class="body">
-        <h3>${it.title}</h3>
+        <h3>${it.title||'（無題）'}</h3>
         <div class="meta">
-          <span>${it.place}</span>
+          <span>${it.place||''}</span>
           <span>距離 ${meta.d}km</span>
-          <span>価格 ${it.price?it.price+"円":"無料/未定"}</span>
+          <span>価格 ${typeof it.price==='number' ? (it.price+'円') : '無料/未定'}</span>
           <span>目安 ${it.when||'要確認'}</span>
           <span class="score">${meta.s}</span>
         </div>
         <div class="tags">${tags}</div>
       </div>
       <div class="cta">
-        <button class="btn" onclick="openMap(${it.lat},${it.lon}, '${it.title.replace(/'/g,"\'")}')">地図</button>
-        <a class="btn primary" href="${it.url}" target="_blank" rel="noopener">予約/詳細</a>
-      </div>`;
-    list.appendChild(el);
-  });
-}
-
-function openMap(lat,lon,title){
-  const q=encodeURIComponent(`${lat},${lon} (${title})`);
-  window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank');
-}
-
-<script>
-async function search(){
-  const q = document.getElementById('q').value.trim();
-  const list = document.getElementById('list');
-  list.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
-
-  // APIを叩く（same-origin の /api/events）
-  const url = new URL('/api/events', window.location.origin);
-  url.searchParams.set('q', q || '');
-  url.searchParams.set('lat', LOC.lat);
-  url.searchParams.set('lon', LOC.lon);
-  url.searchParams.set('radius', 8);
-  url.searchParams.set('fresh', '1');   // 毎回新規抽出（テスト時便利）
-  url.searchParams.set('debug', '0');   // 1にすると内部情報が返る（画面描画には使わない）
-
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (Array.isArray(data) && data.length) {
-      // --- API結果をそのまま描画 ---
-      const ranked = data.map(it => ({
-        it: {
-          title: it.title || '（無題）',
-          tags: Array.isArray(it.tags) ? it.tags : [],
-          place: it.place || '',
-          lat: (typeof it.lat === 'number') ? it.lat : LOC.lat,
-          lon: (typeof it.lon === 'number') ? it.lon : LOC.lon,
-          price: (typeof it.price === 'number') ? it.price : null,
-          when: it.when || '',
-          url: it.url || '#'
-        },
-        meta: { s: it.score ?? 0, d: (it.distance_km ?? 99).toString() }
-      }));
-      render(ranked);
-      updateSourceLinks(q);
-      console.log('from API', data.length);
-      return;
-    }
-
-    // APIが空配列→フォールバック
-    console.log('API empty → fallback');
-    const ranked = CATALOG.map(it => ({ it, meta: score(it, q) }))
-                          .sort((a,b)=>b.meta.s-a.meta.s).slice(0,6);
-    render(ranked);
-    updateSourceLinks(q);
-  } catch (e) {
-    console.warn('API error', e);
-    // 通信失敗→フォールバック
-    const ranked = CATALOG.map(it => ({ it, meta: score(it, q) }))
-                          .sort((a,b)=>b.meta.s-a.meta.s).slice(0,6);
-    render(ranked);
-    updateSourceLinks(q);
-  }
-}
-</script>
+        <button class="btn" onclick="openMap(${it.lat||LOC.lat},${it.lon||LOC.lon}, '${(it.title||'').replace(/'/g,"\\'")}')">地図</button>
+        <a class="btn pr
 
 
-// 現在地ボタン
-document.getElementById('geo').addEventListener('click',()=>{
-  if(!navigator.geolocation){alert('位置情報が使えません');return}
-  navigator.geolocation.getCurrentPosition((p)=>{
-    LOC={lat:p.coords.latitude,lon:p.coords.longitude};
-    updateLocLabel();
-    search();
-  },(e)=>{alert('位置情報の取得に失敗しました');console.warn(e)},{enableHighAccuracy:true,timeout:8000});
-});
 
-// プリセットチップ
-const chipsEl=document.getElementById('chips');
-PRESETS.forEach(t=>{
-  const b=document.createElement('button'); b.className='chip'; b.textContent=t; b.addEventListener('click',()=>{document.getElementById('q').value=t; search(); chipsSetActive(t);});
-  chipsEl.appendChild(b);
-});
-function chipsSetActive(t){
-  [...document.querySelectorAll('.chip')].forEach(c=>c.classList.toggle('active', c.textContent===t));
-}
 
-// 初回描画
-render(CATALOG.map(it=>({it,meta:score(it,'')})));
-
-// 検索ボタン
- document.getElementById('go').addEventListener('click', search);
- document.getElementById('q').addEventListener('keydown', (e)=>{ if(e.key==='Enter') search();});
-
-// --- フッター：ソースリンクを動的生成（じゃらん/市サイト/YouTube） ---
-function updateSourceLinks(q){
-  const area = '相模原';
-  const kw = encodeURIComponent(q||'体験 ワークショップ');
-  const box=document.getElementById('sources');
-  box.innerHTML='';
-  const links=[
-    {name:'じゃらん', url:`https://www.jalan.net/kankou/?word=${kw}`},
-    {name:'相模原市 公式', url:`https://www.google.com/search?q=${encodeURIComponent('site:city.sagamihara.kanagawa.jp ')}${kw}`},
-    {name:'YouTube', url:`https://www.youtube.com/results?search_query=${encodeURIComponent(area+' '+(q||'作ってみた 体験'))}`}
-  ];
-  links.forEach(l=>{
-    const a=document.createElement('a'); a.href=l.url; a.target='_blank'; a.rel='noopener'; a.className='src'; a.textContent=l.name+'で探す'; box.appendChild(a);
-  })
-}
-updateSourceLinks('');
-
-// === 将来：Gemini 連携の入り口（初心者向けに解説付き） ===
-/**
- * addFromGemini(results)
- * - Geminiが返した候補（タイトル/説明/場所/緯度経度/URL/タグ）を CATALOG に追加して search() を再実行
- * - まずはブラウザ内だけで体験。サーバー不要。
- *
- * 例）Geminiレスポンスを仮定：
- * const results=[{
- *   title: "市立公民館 手芸ワークショップ",
- *   tags: ["手芸","屋内","小規模"],
- *   place: "相模原市中央区",
- *   lat: 35.57, lon: 139.37,
- *   price: 500, when: "第2土曜 午後",
- *   url: "https://..."
- * }];
- * addFromGemini(results);
- */
-function addFromGemini(results){
-  if(!Array.isArray(results)) return;
-  results.forEach(r=>CATALOG.push(r));
-  search();
-}
-
-</script>
 </body>
 </html>
