@@ -15,13 +15,13 @@ async function getModel() {
 // まずは “情報が載ってる固定URL” に絞る（増やすのは後でOK）
 const SOURCES = [
   "https://www.city.sagamihara.kanagawa.jp/event_calendar.html",
-  "https://www.city.sagamihara.kanagawa.jp/kankou/1026674/1026704/event/event_all/index.html",
-  "https://www.city.sagamihara.kanagawa.jp/kankou/bunka/1022291/1022302.html",
   "https://sagamiharacitymuseum.jp/event/",
   "https://sagamiharacitymuseum.jp/eventnews/",
-  "https://sagamigawa-fureai.com/commentary/",
-  // 必要に応じて増やす
+  "https://sagamiharacitymuseum.jp/event/exhibition/",
+  "https://sagamigawa-fureai.com/",
+  "https://www.city.sagamihara.kanagawa.jp/kankou/1026674/hayabusa2/1033156.html"
 ];
+
 
 
 export default async function handler(req, res) {
