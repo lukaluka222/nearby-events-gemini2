@@ -1,4 +1,4 @@
-// api/events.mjs — リンク抽出 → イベント整形（同義語展開 + 0件フォールバック + debug対応）
+// api/events.mjs — 緩めフィルタ + 最終フォールバック（空を返さない）
 
 function send(res, obj) {
   res.statusCode = 200;
@@ -15,44 +15,40 @@ const SOURCES = [
   'https://www.e-sagamihara.com/event/'
 ];
 
-// 正規化：全角→半角、ひら/カナゆらぎの一部吸収
-function norm(s=''){
-  return s.toString().normalize('NFKC').toLowerCase();
-}
+// 正規化
+function norm(s=''){ return s.toString().normalize('NFKC').toLowerCase(); }
 
-// 検索語の同義語を広げる
+// 同義語展開（緩め）
 function expandTerms(qRaw=''){
   const q = norm(qRaw);
   const terms = new Set();
-  if(!q || q.trim()==='') return [];
-
+  if(!q) return [];
   terms.add(q);
 
-  if(q.includes('苔') || q.includes('こけ') || q.includes('ｺｹ') ){
-    ['苔','こけ','コケ','苔玉','苔テラリウム','テラリウム','苔庭','苔観察','苔の観察'].forEach(t=>terms.add(norm(t)));
+  if(q.includes('苔') || q.includes('こけ') || q.includes('ｺｹ')){
+    ['苔','こけ','コケ','苔玉','テラリウム','苔観察','苔の観察','苔庭'].forEach(t=>terms.add(norm(t)));
   }
   if(q.includes('手芸')){
-    ['手芸','ハンドメイド','ハンドクラフト','刺し子','刺繍','裁縫','ミシン','ビーズ','フェルト','羊毛フェルト','布小物'].forEach(t=>terms.add(norm(t)));
+    ['手芸','ハンドメイド','クラフト','刺し子','刺繍','裁縫','ミシン','ビーズ','フェルト','羊毛フェルト','布小物'].forEach(t=>terms.add(norm(t)));
   }
-  if(q.includes('編み') || q.includes('あみもの')){
+  if(q.includes('編み') || q.includes('あみ') || q.includes('ニット')){
     ['編み物','かぎ編み','棒針編み','ニット','マフラー','アミグルミ'].forEach(t=>terms.add(norm(t)));
   }
-  if(q.includes('木工')){
-    ['木工','木づくり','DIY','クラフト','木の工作','木材','工房体験'].forEach(t=>terms.add(norm(t)));
+  if(q.includes('木工') || q.includes('木')){
+    ['木工','木の工作','DIY','クラフト','木材','工房体験'].forEach(t=>terms.add(norm(t)));
   }
   if(q.includes('花') || q.includes('フラワー')){
     ['花屋','フラワー','ブーケ','アレンジメント','生け花','ドライフラワー'].forEach(t=>terms.add(norm(t)));
   }
   if(q.includes('科学') || q.includes('科学館')){
-    ['科学','科学館','工作','実験','観察','天体観望','星空','プラネタリウム'].forEach(t=>terms.add(norm(t)));
+    ['科学','科学館','工作','実験','観察','天体観望','星空','プラネタ','プラネタリウム'].forEach(t=>terms.add(norm(t)));
   }
-
   return [...terms];
 }
 
-const GENERIC_WORDS = ['イベント','体験','ワークショップ','講座','教室','観察','自然','展示','工作','工房','ミッション'];
+const GENERIC = ['イベント','体験','ワークショップ','講座','教室','観察','自然','展示','工作','工房','ミッション'];
 
-// タイトルから日付っぽい文字列を抜く（簡易）
+// 日付抽出（簡易）
 function extractWhen(label='') {
   const s = label.replace(/\s+/g,' ');
   const re1 = /(?:20\d{2}年)?\s*\d{1,2}\s*月\s*\d{1,2}\s*日(?:\s*[（(][^）)]+[）)])?/g;
@@ -64,9 +60,15 @@ function extractWhen(label='') {
   return '';
 }
 
-// ラベル整形
+// タイトル整形
 function cleanTitle(label=''){
   return label.replace(/[【】「」『』［］\[\]（）()]/g,' ').replace(/\s+/g,' ').trim();
+}
+
+// 「イベントっぽい」URL判定（緩め）
+function urlLooksEvent(u=''){
+  const s = u.toLowerCase();
+  return /(event|events|workshop|ws|calendar|katsudou|news|exhibition)/.test(s);
 }
 
 export default async function handler(req, res) {
@@ -79,7 +81,7 @@ export default async function handler(req, res) {
   const qNorm = norm(qRaw);
   const debug = url.searchParams.get('debug') === '1';
 
-  // --- モック ---
+  // --- モック（残す） ---
   if (mode === 'mock') {
     const LINKS = [
       { url:'https://example.com/koke1', label:'苔の観察ワークショップ（相模原）' },
@@ -100,41 +102,49 @@ export default async function handler(req, res) {
   const links = [];
   for (const src of SOURCES) {
     try {
-      const r = await fetch(src, {
-        headers: { 'User-Agent':'Mozilla/5.0', 'Accept-Language':'ja-JP,ja;q=0.9' }
-      });
+      const r = await fetch(src, { headers: { 'User-Agent':'Mozilla/5.0', 'Accept-Language':'ja-JP,ja;q=0.9' }});
       const html = await r.text();
       const ms = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis)];
       for (const m of ms) {
         const href  = m[1];
         const label = m[2].replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-        if (!label || label.length < 3) continue;
+        if (!label || label.length < 2) continue;
         let abs = href; try { abs = new URL(href, src).toString(); } catch {}
         links.push({ url:abs, label, labelN:norm(label) });
       }
-    } catch {/* 失敗サイトはスキップ */}
+    } catch {}
   }
 
+  // --- フィルタ（段階的に緩める） ---
   const terms = expandTerms(qRaw);
-  const byUrl = new Map();
 
-  // フィルタ：まず同義語、なければ素の q、さらに 0 件なら汎用語
+  // 1) 同義語 or 元のq（ラベル）
   let filtered = [];
-  if (terms.length) {
-    filtered = links.filter(L => terms.some(t => L.labelN.includes(t)));
-  }
-  if (!filtered.length && qNorm) {
-    filtered = links.filter(L => L.labelN.includes(qNorm));
-  }
+  if (terms.length) filtered = links.filter(L => terms.some(t => L.labelN.includes(t)));
+  if (!filtered.length && qNorm) filtered = links.filter(L => L.labelN.includes(qNorm));
+
+  // 2) まだ0なら「イベントっぽい」ラベル or URL
   if (!filtered.length) {
-    filtered = links.filter(L => GENERIC_WORDS.some(w => L.label.includes(w)));
+    const genN = GENERIC.map(norm);
+    filtered = links.filter(L =>
+      genN.some(g => L.labelN.includes(g)) || urlLooksEvent(L.url)
+    );
   }
 
-  // ドメイン上限と重複除去
+  // 3) それでも0なら「全部の中から URL がイベントっぽいもの」を上位20件
+  if (!filtered.length) {
+    filtered = links.filter(L => urlLooksEvent(L.url));
+  }
+
+  // 4) 最終フォールバック：本当に0なら「先頭から12件だけ」見せてデバッグ
+  const finalList = filtered.length ? filtered : links.slice(0, 12);
+
+  // 重複 & ドメイン上限
+  const byUrl = new Map();
   const perDomainCap = 4;
   const domainCount = {};
   const capped = [];
-  for (const L of filtered) {
+  for (const L of finalList) {
     if (byUrl.has(L.url)) continue;
     byUrl.set(L.url, true);
     let host=''; try { host = new URL(L.url).host.replace(/^www\./,''); } catch {}
@@ -144,14 +154,14 @@ export default async function handler(req, res) {
     if (capped.length >= 20) break;
   }
 
-  // mode=links（デバッグ確認用）
+  // --- mode=links（デバッグ） ---
   if (mode === 'links') {
     const sample = capped.slice(0,12).map(L => ({ url:L.url, label:L.label }));
     if (debug) return send(res, { ok:true, q:qRaw, total_links:links.length, count:sample.length, sample });
     return send(res, { ok:true, count:sample.length, sample });
   }
 
-  // 通常モード：イベント形に整形（空配列だと画面が真っ白に見えるので debug=1 で中身確認できる）
+  // --- 通常モード：イベント配列に整形 ---
   const events = capped.map(L => ({
     title: cleanTitle(L.label),
     description: '',
@@ -167,4 +177,3 @@ export default async function handler(req, res) {
   if (debug) return send(res, { ok:true, q:qRaw, count:events.length, sample:events.slice(0,8) });
   return send(res, events);
 }
-
