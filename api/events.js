@@ -37,12 +37,32 @@ export default async function handler(req, res) {
   try {
     // 1) 収集：本文テキストをざっくり抽出（fetch は Node18+ で標準）
     let allText = '';
+    let allText = '';
+    let allLinks = [];
+
     for (const src of SOURCES) {
       try {
         const r = await fetch(src, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         const html = await r.text();
         // 超簡易テキスト化（cheerio無し）：タグを削って空白整理
         const text = html
+
+          // aタグ（リンク）からタイトルらしきテキストを収集
+const linkMatches = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis)];
+for (const m of linkMatches) {
+  const href = m[1];
+  const label = m[2].replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+  if (label && label.length >= 4) {
+    let abs = href;
+    try { abs = new URL(href, src).toString(); } catch {}
+    allLinks.push({ url: abs, label, host: new URL(abs).host.replace(/^www\./,'') });
+  }
+}
+        const r = await fetch(src, {
+  headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ja-JP,ja;q=0.9' }
+});
+
+
           .replace(/<script[^>]*>.*?<\/script>/gis, ' ')
           .replace(/<style[^>]*>.*?<\/style>/gis, ' ')
           .replace(/<[^>]+>/g, ' ')
@@ -86,7 +106,17 @@ try {
   errors.push('gemini parse: ' + e.message);
 }
 
-    
+    if (!events.length && allLinks.length) {
+  const fb = fallbackFromLinks(allLinks, q);
+  if (fb.length) {
+    events = fb;
+    errors.push(`fallback: links -> ${fb.length}`);
+  }
+}
+
+    // 似た候補が多いときのバラけ対策（軽いシャッフル）
+uniq.sort(() => Math.random() - 0.5);
+
 
     // 3) 正規化 → デデュープ → ドメイン上限 → 半径フィルタ → スコア
 const norm = events.map(normalize);
@@ -179,6 +209,43 @@ function canonicalWhen(s=''){
 function hostOf(u=''){
   try{ return new URL(u).host.replace(/^www\./,''); }catch{ return ''; }
 }
+
+
+function fallbackFromLinks(links, q) {
+  // 優先ワード（qがあれば最優先）
+  const KEY = q ? [q, "イベント","体験","ワークショップ","講座","展","観望","工作","教室"]
+                : ["イベント","体験","ワークショップ","講座","展","観望","工作","教室"];
+
+  // ドメインごとに上限（偏り防止）
+  const perDomainCap = 2;
+  const domainCount = {};
+
+  const out = [];
+  for (const L of links) {
+    const label = L.label;
+    // ラベルに優先ワードが1つでも含まれる
+    if (!KEY.some(k => label.includes(k))) continue;
+
+    // ドメイン上限
+    domainCount[L.host] = (domainCount[L.host] || 0) + 1;
+    if (domainCount[L.host] > perDomainCap) continue;
+
+    out.push({
+      title: label.slice(0, 80),
+      description: "",
+      place: "",
+      lat: null, lon: null,
+      price: null,
+      when: "",
+      tags: [],
+      url: L.url
+    });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+
 
 // 似たものをまとめるキー：タイトル + 場所 + 期間
 function makeKey(e){
