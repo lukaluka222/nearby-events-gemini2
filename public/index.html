@@ -157,21 +157,63 @@ function openMap(lat,lon,title){
   window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank');
 }
 
-// 検索
-function search(){
+<script>
+async function search(){
   const q = document.getElementById('q').value.trim();
-  // ローディング風
-  const list=document.getElementById('list');
+  const list = document.getElementById('list');
   list.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
-  setTimeout(()=>{
-    const ranked = CATALOG
-      .map(it=>({it, meta: score(it, q)}))
-      .sort((a,b)=>b.meta.s-a.meta.s)
-      .slice(0,6);
+
+  // APIを叩く（same-origin の /api/events）
+  const url = new URL('/api/events', window.location.origin);
+  url.searchParams.set('q', q || '');
+  url.searchParams.set('lat', LOC.lat);
+  url.searchParams.set('lon', LOC.lon);
+  url.searchParams.set('radius', 8);
+  url.searchParams.set('fresh', '1');   // 毎回新規抽出（テスト時便利）
+  url.searchParams.set('debug', '0');   // 1にすると内部情報が返る（画面描画には使わない）
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (Array.isArray(data) && data.length) {
+      // --- API結果をそのまま描画 ---
+      const ranked = data.map(it => ({
+        it: {
+          title: it.title || '（無題）',
+          tags: Array.isArray(it.tags) ? it.tags : [],
+          place: it.place || '',
+          lat: (typeof it.lat === 'number') ? it.lat : LOC.lat,
+          lon: (typeof it.lon === 'number') ? it.lon : LOC.lon,
+          price: (typeof it.price === 'number') ? it.price : null,
+          when: it.when || '',
+          url: it.url || '#'
+        },
+        meta: { s: it.score ?? 0, d: (it.distance_km ?? 99).toString() }
+      }));
+      render(ranked);
+      updateSourceLinks(q);
+      console.log('from API', data.length);
+      return;
+    }
+
+    // APIが空配列→フォールバック
+    console.log('API empty → fallback');
+    const ranked = CATALOG.map(it => ({ it, meta: score(it, q) }))
+                          .sort((a,b)=>b.meta.s-a.meta.s).slice(0,6);
     render(ranked);
     updateSourceLinks(q);
-  }, 300);
+  } catch (e) {
+    console.warn('API error', e);
+    // 通信失敗→フォールバック
+    const ranked = CATALOG.map(it => ({ it, meta: score(it, q) }))
+                          .sort((a,b)=>b.meta.s-a.meta.s).slice(0,6);
+    render(ranked);
+    updateSourceLinks(q);
+  }
 }
+</script>
+
 
 // 現在地ボタン
 document.getElementById('geo').addEventListener('click',()=>{
