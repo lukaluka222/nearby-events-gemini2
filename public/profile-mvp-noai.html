@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>プロフィールMVP（AIなし）</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:20px}
+  .grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}
+  .card{border:1px solid #ddd;border-radius:10px;padding:12px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .messages{height:280px;overflow:auto;border:1px solid #eee;padding:8px;border-radius:8px;background:#fafafa}
+  .msg{margin:6px 0}
+  .msg.me{ text-align:right }
+  textarea{width:100%;min-height:80px}
+  input,button,select{padding:8px;font-size:14px}
+  pre{background:#f6f8fa;padding:10px;overflow:auto}
+  .chip{padding:4px 8px;border:1px solid #aaa;border-radius:999px;background:#fff;cursor:pointer}
+  .chip.active{background:#333;color:#fff;border-color:#333}
+  .muted{color:#666;font-size:12px}
+</style>
+</head>
+<body>
+<h1>プロフィール作成（AIなしMVP）</h1>
+<p class="muted">会話の中から簡単なルールで項目を拾い、右のプロフィールに反映します。編集→保存可能。</p>
+
+<div class="card">
+  <div class="row">
+    <div>UID: <code id="uid">（未）</code></div>
+    <button id="loginBtn">匿名ログイン</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>子どもを選ぶ / 作る</h2>
+  <div class="row">
+    <input id="childName" placeholder="表示名（例：太郎）"/>
+    <input id="childAge" type="number" min="0" placeholder="年齢（任意）" style="width:140px"/>
+    <button id="createChildBtn">この子を作成</button>
+  </div>
+  <div class="row" id="childrenList" style="margin-top:8px"></div>
+  <div style="margin-top:8px">現在の子: <b id="currentChild">（未選択）</b></div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>チャット</h2>
+    <div class="messages" id="messages"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="chatInput" placeholder="例）大人数と大音量は苦手。予算は2000円。移動は45分まで。午前が元気。"/>
+      <button id="sendBtn">送信</button>
+    </div>
+    <details style="margin-top:10px">
+      <summary>入力アシスト（クリックで追加入力）</summary>
+      <div class="row
