@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>先輩の人生マップ</title>
+<style>
+  :root{
+    --bg:#fffcf6; --ink:#1e293b; --muted:#6b7280;
+    --card:#ffffff; --border:#eef2f7; --accent:#6b8cff;
+    --purple:#a78bfa; --gray:#e5e7eb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,system-ui,Segoe UI,Roboto}
+  header{position:sticky;top:0;background:linear-gradient(#fff,rgba(255,255,255,.9));
+    backdrop-filter:saturate(1.2) blur(6px);padding:12px 16px;border-bottom:1px solid var(--border)}
+  .title{font-weight:700}
+  .wrap{max-width:420px;margin:0 auto;padding:12px}
+  .canvas{position:relative;aspect-ratio:9/16;background:linear-gradient(180deg,#fff 0%, #fffaf3 100%);
+    border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 6px 16px rgba(0,0,0,.06)}
+  svg{position:absolute;inset:0}
+  .node{position:absolute;transform:translate(-50%,-50%);width:84px}
+  .dot{width:24px;height:24px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+  .bubble{margin-top:8px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:8px;
+    font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.05)}
+  .dot.purple{background:var(--purple)}
+  .dot.gray{background:var(--gray)}
+  .legend{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px;margin:8px 0}
+  .legend .sw{width:12px;height:12px;border-radius:50%}
+  /* モーダル */
+  dialog{border:none;border-radius:16px;max-width:520px;width:92vw;padding:0;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+  dialog::backdrop{background:rgba(0,0,0,.25)}
+  .modal-h{padding:14px 16px;border-bottom:1px solid var(--border);font-weight:700}
+  .modal-b{padding:16px}
+  .btn{background:var(--accent);color:#fff;border:none;border-radius:12px;padding:10px 14px;font-weight:700}
+</style>
+
+<header><div class="title">るかさんの人生マップ（見本）</div></header>
+<div class="wrap">
+  <div class="canvas" id="canvas">
+    <!-- 背景のS字パス（見た目用） -->
+    <svg viewBox="0 0 390 700" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="soft"><feGaussianBlur in="SourceGraphic" stdDeviation="3" /></filter>
+      </defs>
+      <path id="track" d="M40,40 C180,20 210,120 350,100
+                           C210,130 180,240 40,220
+                           C180,260 210,360 350,340
+                           C210,380 180,480 40,460
+                           C180,500 210,600 350,580" 
+            fill="none" stroke="#efe6ff" stroke-width="28" filter="url(#soft)"/>
+      <path d="M40,40 C180,20 210,120 350,100
+               C210,130 180,240 40,220
+               C180,260 210,360 350,340
+               C210,380 180,480 40,460
+               C180,500 210,600 350,580" 
+            fill="none" stroke="#e9ecff" stroke-width="10" />
+    </svg>
+    <!-- ここにJSで10コマを配置 -->
+  </div>
+
+  <div class="legend">
+    <span class="sw" style="background:#a78bfa"></span>強調コマ
+    <span class="sw" style="background:#e5e7eb;margin-left:12px"></span>通常コマ
+  </div>
+</div>
+
+<dialog id="dlg">
+  <div class="modal-h" id="dlgTitle">詳細</div>
+  <div class="modal-b" id="dlgBody"></div>
+  <div style="padding:12px 16px;border-top:1px solid var(--border);text-align:right">
+    <button onclick="dlg.close()">閉じる</button>
+  </div>
+</dialog>
+
+<script>
+  // --- ダミーデータ（Firestoreの mentors/{id}/steps をここに差し替え） ---
+  const steps = [
+    { step:1,  text:"勉強も運動もできる繊細な子ども", detail:"小学生の頃は…", color:"gray" },
+    { step:2,  text:"学校の人間関係に疲れる", detail:"中学入学後に…", color:"gray" },
+    { step:3,  text:"中2で起立性調節障害の診断", detail:"診断の経緯…", color:"purple" },
+    { step:4,  text:"親に『行けるなら学校へ』と言われ辛い", detail:"家庭での会話…", color:"gray" },
+    { step:5,  text:"祖母宅で穏やかな時間を過ごす", detail:"家族の支え…", color:"gray" },
+    { step:6,  text:"少しずつ関係が和らぐ", detail:"日々の変化…", color:"gray" },
+    { step:7,  text:"正月に伯父の一言で自信を得る", detail:"『大丈夫だよ』…", color:"purple" },
+    { step:8,  text:"祖母の後押しで通信制高校へ", detail:"進路決定…", color:"gray" },
+    { step:9,  text:"父と外出し人と話す機会が増える", detail:"体験談…", color:"gray" },
+    { step:10, text:"発明家志望→美大へ。デザインの道へ", detail:"現在は…", color:"gray" }
+  ];
+
+  // パス上の割合（0〜1）に各コマを配置（10コマなら均等でOK／微調整も可）
+  const tPositions = [0.03,0.13,0.22,0.31,0.40,0.49,0.58,0.69,0.80,0.92];
+
+  // --- パス長から座標を取って配置 ---
+  const svg = document.querySelector("svg");
+  const path = document.getElementById("track");
+  const length = path.getTotalLength();
+  const canvas = document.getElementById("canvas");
+  const dlg = document.getElementById("dlg");
+  const dlgTitle = document.getElementById("dlgTitle");
+  const dlgBody = document.getElementById("dlgBody");
+
+  steps.forEach((s, i) => {
+    const t = tPositions[i] ?? (i/(steps.length-1));
+    const p = path.getPointAtLength(length * t);
+    const node = document.createElement("div");
+    node.className = "node";
+    node.style.left = p.x+"px";
+    node.style.top  = p.y+"px";
+    node.innerHTML = `
+      <div class="dot ${s.color === "purple" ? "purple" : "gray"}"></div>
+      <div class="bubble">${escapeHtml(s.text)}</div>
+    `;
+    node.onclick = () => {
+      dlgTitle.textContent = `第${s.step}コマ`;
+      dlgBody.textContent  = s.detail || "詳細は準備中です。";
+      dlg.showModal();
+    };
+    canvas.appendChild(node);
+  });
+
+  function escapeHtml(str){
+    return (str||"").replace(/[&<>"']/g, s=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[s]));
+  }
+</script>
+</html>
