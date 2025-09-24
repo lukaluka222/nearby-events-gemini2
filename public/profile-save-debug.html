@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8" />
+<title>Firestore デバッグ</title>
+<style>
+  body{font-family:system-ui;margin:24px}
+  input,button,textarea{padding:8px;font-size:14px}
+  pre{background:#f6f8fa;padding:12px;overflow:auto;white-space:pre-wrap}
+  .card{border:1px solid #ddd;border-radius:8px;padding:12px;margin-bottom:16px}
+</style>
+
+<h1>Firestore デバッグ</h1>
+
+<div class="card">
+  <div>projectId: <code id="proj">-</code></div>
+  <div>UID: <code id="uid">（未ログイン）</code></div>
+  <div>直近のパス: <code id="path">-</code></div>
+  <div id="msg" style="color:#666;margin-top:6px"></div>
+</div>
+
+<div class="card">
+  <h2>保存テスト</h2>
+  <input id="displayName" placeholder="表示名（例：太郎）">
+  <input id="age" type="number" min="0" placeholder="年齢" style="width:120px">
+  <button id="createBtn">子どもを作成（自動ID）</button>
+  <button id="saveBtn">上記 child に上書き保存</button>
+</div>
+
+<div class="card">
+  <h2>読み出しテスト</h2>
+  <button id="loadBtn">parents/{uid}/children を全部読む</button>
+  <pre id="out">（ここに結果/エラーが出ます）</pre>
+</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import {
+    getFirestore, collection, doc, addDoc, setDoc, getDocs, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ★ あなたの Firebase web 設定で置き換え（3行）
+  const firebaseConfig = {
+    apiKey: "AIza...（本物）",
+    authDomain: "your-project-id.firebaseapp.com",
+    projectId: "your-project-id"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const $ = (id) => document.getElementById(id);
+  $("proj").textContent = firebaseConfig.projectId;
+
+  let uid = null;
+  let currentChildId = null;
+
+  function log(s, isError=false){
+    const t = typeof s === "string" ? s : JSON.stringify(s, null, 2);
+    $("out").textContent = (isError ? "❌ " : "✅ ") + t + "\n\n" + $("out").textContent;
+  }
+
+  // 1) 匿名ログイン
+  signInAnonymously(auth).then(() => {
+    uid = auth.currentUser.uid;
+    $("uid").textContent = uid;
+    $("msg").textContent = "匿名ログインOK";
+  }).catch(e => {
+    $("msg").textContent = "匿名ログイン失敗: " + e.message;
+    log(e, true);
+  });
+
+  // 2) 自動IDで新規作成
+  $("createBtn").onclick = async () => {
+    try {
+      if (!uid) throw new Error("未ログインです");
+      const displayName = $("displayName").value.trim() || "ななし";
+      const age = $("age").value ? Number($("age").value) : null;
+
+      const ref = await addDoc(collection(db, "parents", uid, "children"), {
+        displayName, age,
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+      });
+      currentChildId = ref.id;
+      const path = `parents/${uid}/children/${currentChildId}`;
+      $("path").textContent = path;
+      log({ action: "created", path });
+    } catch (e) {
+      log(e, true);
+    }
+  };
+
+  // 3) 上書き保存
+  $("saveBtn").onclick = async () => {
+    try {
+      if (!uid) throw new Error("未ログインです");
+      if (!currentChildId) throw new Error("先に『子どもを作成』を押してください");
+      const displayName = $("displayName").value.trim() || "ななし";
+      const age = $("age").value ? Number($("age").value) : null;
+
+      const path = `parents/${uid}/children/${currentChildId}`;
+      await setDoc(doc(db, "parents", uid, "children", currentChildId), {
+        displayName, age, updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      $("path").textContent = path;
+      log({ action: "saved", path, displayName, age });
+    } catch (e) {
+      log(e, true);
+    }
+  };
+
+  // 4) 読み出し
+  $("loadBtn").onclick = async () => {
+    try {
+      if (!uid) throw new Error("未ログインです");
+      const col = collection(db, "parents", uid, "children");
+      const snap = await getDocs(col);
+      const rows = [];
+      snap.forEach(d => rows.push({ id: d.id, ...d.data() }));
+      log({ action: "loaded", count: rows.length, rows });
+    } catch (e) {
+      log(e, true);
+    }
+  };
+</script>
+</html>
