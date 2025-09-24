@@ -1,5 +1,5 @@
 {
-  "name": "nearby-events-gemini",
+  "name": "nearby-events-gemini2",
   "private": true,
   "type": "module",
   "engines": { "node": ">=18" },
@@ -7,3 +7,4 @@
     "@google/generative-ai": "^0.21.0"
   }
 }
+
