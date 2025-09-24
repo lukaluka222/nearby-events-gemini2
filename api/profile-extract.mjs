@@ -48,6 +48,25 @@ const model = genAI.getGenerativeModel({
       "----- transcript end -----"
     ].filter(Boolean).join("\n");
 
+// api/profile-extract.mjs の try 内で generateContent の直前/後に
+try {
+  const result = await model.generateContent(prompt);
+  // ...（今の処理そのまま）
+} catch (e) {
+  const msg = String(e?.message || e);
+  if (msg.includes("429") || msg.toLowerCase().includes("too many requests") || msg.includes("Quota")) {
+    res.statusCode = 429;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({
+      error: "Geminiのクォータ制限に達しました。モデル/キー/入力サイズを見直してください。",
+      hint: "GEMINI_MODEL=gemini-1.5-flash を試すか、課金を有効化してください。"
+    }));
+    return;
+  }
+  throw e; // それ以外は既存の500処理へ
+}
+
+    
     const result = await model.generateContent(prompt);
     let jsonText = result?.response?.text?.() || "";
     jsonText = jsonText.replace(/```json|```/g, ""); // フェンス除去
