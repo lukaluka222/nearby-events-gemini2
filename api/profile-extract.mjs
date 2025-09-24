@@ -26,14 +26,14 @@ export default async function handler(req, res) {
       res.end(JSON.stringify({ error: "transcript and childId are required" }));
       return;
     }
+    
+// api/profile-extract.mjs
+const MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash"; // ← ここ
+const model = genAI.getGenerativeModel({
+  model: MODEL,
+  generationConfig: { responseMimeType: "application/json" }
+});
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-pro",
-      generationConfig: {
-        responseMimeType: "application/json"
-      }
-    });
 
     const prompt = [
       "あなたは保護者インタビューから児童のプロフィールを作るアシスタントです。",
