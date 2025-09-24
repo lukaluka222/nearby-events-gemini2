@@ -52,4 +52,232 @@
     </div>
     <details style="margin-top:10px">
       <summary>入力アシスト（クリックで追加入力）</summary>
-      <div class="row
+      <div class="row" style="margin-top:6px">
+        <span class="chip">科学実験が好き</span>
+        <span class="chip">手芸が好き</span>
+        <span class="chip">静かな場所が良い</span>
+        <span class="chip">屋内が良い</span>
+        <span class="chip">友だちと一緒OK</span>
+        <span class="chip">保護者同伴が必要</span>
+        <span class="chip">午前が元気</span>
+        <span class="chip">土曜午後が良い</span>
+        <span class="chip">人混みが苦手</span>
+        <span class="chip">大音量が苦手</span>
+      </div>
+    </details>
+    <p class="muted">※ 送信するたびに右のプロフィールへ自動反映します（ルール抽出）。</p>
+  </div>
+
+  <div class="card">
+    <h2>プロフィール（編集可）</h2>
+    <pre id="profileJson">{}</pre>
+    <div class="row">
+      <button id="saveBtn">Firestoreに保存</button>
+      <button id="reloadBtn">Firestoreから再読込</button>
+    </div>
+    <div class="muted" style="margin-top:6px">保存先: parents/{uid}/profiles/{childId}</div>
+  </div>
+</div>
+
+<!-- Firebase CDN（v10系） -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import {
+    getFirestore, doc, setDoc, getDoc, addDoc, collection, getDocs, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ★ あなたのFirebase設定を貼ってください
+  const firebaseConfig = {
+    apiKey: "YOUR_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    projectId: "YOUR_PROJECT"
+  };
+
+  // ---- 初期化 ----
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const $ = id => document.getElementById(id);
+
+  let uid = null;
+  let currentChildId = null;
+  let messages = []; // [{role:'parent', text:'...'}]
+
+  // ---- スキーマ（将来AIと互換） ----
+  function emptyProfile(childId) {
+    return {
+      childId,
+      basic: { displayName: "", age: null, schoolAttendance: null, preferredDaysOut: [] },
+      interests: { categories: [], tags: [] },
+      constraints: { budgetPerEventJPY: null, travelTimeMinutesMax: null, noiseSensitivity: null, crowdAversion: null, mobilityNotes: null },
+      social: { preferredGroupSize: null, needsGuardian: null, friendTogetherOk: null },
+      goals: { shortTerm: [], midTerm: [], longTerm: [] },
+      safetyAndNotes: "",
+      lastUpdated: new Date().toISOString()
+    };
+  }
+
+  // ---- ルール抽出（超シンプルな決め打ち）----
+  // メッセージ群からプロフィールに反映（決め打ちキーワード＆正規表現）
+  function extractFromMessages(profile, msgs) {
+    const text = msgs.map(m => m.text).join("。");
+
+    // 1) 予算（例：「2000円」「¥1500」）
+    const m1 = text.match(/([0-9]{3,6})\s*円|¥\s*([0-9]{3,6})/);
+    if (m1) {
+      const val = Number(m1[1] || m1[2]);
+      if (!isNaN(val)) profile.constraints.budgetPerEventJPY = val;
+    }
+
+    // 2) 移動時間（「45分」「1時間」）
+    const m2 = text.match(/([0-9]{1,2})\s*分/);
+    const m2h = text.match(/([0-2])\s*時間/);
+    if (m2) profile.constraints.travelTimeMinutesMax = Number(m2[1]);
+    if (m2h) profile.constraints.travelTimeMinutesMax = Math.max(profile.constraints.travelTimeMinutesMax||0, Number(m2h[1])*60);
+
+    // 3) 苦手・配慮
+    if (/大音量|音が大きい|爆音|静かな?場所が?良い/.test(text)) profile.constraints.noiseSensitivity = true;
+    if (/人混み|混雑|大人数が?苦手/.test(text)) profile.constraints.crowdAversion = true;
+
+    // 4) 好き（カテゴリ/タグ）
+    const likeMap = [
+      { re:/科学(実験)?|サイエンス|理科/, addCat:"科学実験", addTag:"サイエンス" },
+      { re:/手芸|ハンドメイド|編み物|刺繍/, addCat:"手芸", addTag:"ハンドメイド" },
+      { re:/工作|クラフト|木工/, addCat:"工作", addTag:"クラフト" },
+      { re:/水族館|動物園|昆虫|生き物|生物/, addCat:"生き物", addTag:"水族館" },
+      { re:/アウトドア|公園|自然|ハイキング/, addCat:"アウトドア", addTag:"自然" }
+    ];
+    likeMap.forEach(rule=>{
+      if (rule.re.test(text)) {
+        if (!profile.interests.categories.includes(rule.addCat)) profile.interests.categories.push(rule.addCat);
+        if (!profile.interests.tags.includes(rule.addTag)) profile.interests.tags.push(rule.addTag);
+      }
+    });
+
+    // 5) 時間帯/曜日
+    if (/午前(中)?が?元気|午前/.test(text)) pushUniq(profile.basic.preferredDaysOut, "平日午前");
+    if (/土曜(の)?午後|土曜午後/.test(text)) pushUniq(profile.basic.preferredDaysOut, "土曜午後");
+
+    // 6) 同伴/友達
+    if (/保護者同伴(が)?必要|付き添い(が)?必要/.test(text)) profile.social.needsGuardian = true;
+    if (/友(だち|達)と一緒OK|友達OK|友だちOK/.test(text)) profile.social.friendTogetherOk = true;
+
+    // 7) グループ規模
+    if (/少人数|小規模/.test(text)) profile.social.preferredGroupSize = "少人数";
+
+    // 8) ノート
+    const notes = [];
+    if (profile.constraints.noiseSensitivity) notes.push("大音量が苦手");
+    if (profile.constraints.crowdAversion) notes.push("人混みが苦手");
+    if (/午前/.test(text)) notes.push("午前が元気");
+    if (notes.length) profile.safetyAndNotes = Array.from(new Set((profile.safetyAndNotes + " " + notes.join(" ")).trim().split(/\s+/))).join(" ");
+
+    profile.lastUpdated = new Date().toISOString();
+    return profile;
+  }
+  function pushUniq(arr, v){ if(!arr.includes(v)) arr.push(v); }
+
+  // ---- UIヘルパ ----
+  function renderMessages() {
+    const box = $("messages");
+    box.innerHTML = "";
+    messages.forEach(m=>{
+      const div = document.createElement("div");
+      div.className = "msg " + (m.role==="parent"?"me":"");
+      div.textContent = (m.role==="parent"?"👤 ":"") + m.text;
+      box.appendChild(div);
+    });
+    box.scrollTop = box.scrollHeight;
+  }
+  function setProfile(profile){ $("profileJson").textContent = JSON.stringify(profile, null, 2); }
+  function getProfile(){ try { return JSON.parse($("profileJson").textContent||"{}"); } catch(e){ return {}; } }
+
+  // ---- Firebase ログイン/子作成/保存 ----
+  $("loginBtn").onclick = async () => { await signInAnonymously(auth); };
+
+  onAuthStateChanged(auth, async user=>{
+    if (user){ uid = user.uid; $("uid").textContent = uid; await loadChildren(); }
+  });
+
+  async function loadChildren() {
+    const col = collection(db, "parents", uid, "children");
+    const snap = await getDocs(col);
+    const list = [];
+    snap.forEach(d=>list.push({ id:d.id, ...d.data() }));
+    renderChildren(list);
+  }
+
+  function renderChildren(list){
+    const wrap = $("childrenList");
+    wrap.innerHTML = "";
+    if (!list.length){ wrap.textContent = "（まだいません）"; return; }
+    list.forEach(c=>{
+      const btn = document.createElement("button");
+      btn.textContent = `${c.displayName || "(ななし)"} を選択`;
+      btn.onclick = async ()=>{
+        currentChildId = c.id;
+        $("currentChild").textContent = `${c.displayName || "(ななし)"}（${c.id}）`;
+        // 既存プロフィール読込
+        const ref = doc(db, "parents", uid, "profiles", currentChildId);
+        const snap = await getDoc(ref);
+        setProfile(snap.exists()? snap.data() : emptyProfile(currentChildId));
+      };
+      wrap.appendChild(btn);
+    });
+  }
+
+  $("createChildBtn").onclick = async ()=>{
+    if(!uid){ alert("先に匿名ログインしてください"); return; }
+    const name = $("childName").value.trim() || "ななし";
+    const age = $("childAge").value? Number($("childAge").value) : null;
+    const ref = await addDoc(collection(db, "parents", uid, "children"), { displayName:name, age, createdAt: serverTimestamp() });
+    currentChildId = ref.id;
+    $("currentChild").textContent = `${name}（${ref.id}）`;
+    setProfile(emptyProfile(currentChildId));
+    await loadChildren();
+    alert("作成しました。チャットでメモを送ってみてください。");
+  };
+
+  $("sendBtn").onclick = ()=>{
+    if(!currentChildId){ alert("子どもを選んでください"); return; }
+    const t = $("chatInput").value.trim();
+    if(!t) return;
+    messages.push({ role:"parent", text:t });
+    renderMessages();
+    $("chatInput").value = "";
+    // ルール抽出してプロフィール反映
+    const prof = getProfile().childId? getProfile() : emptyProfile(currentChildId);
+    const next = extractFromMessages(prof, messages);
+    setProfile(next);
+  };
+
+  // アシストチップ
+  document.querySelectorAll(".chip").forEach(ch=>{
+    ch.onclick = ()=>{
+      const inp = $("chatInput");
+      inp.value = (inp.value? inp.value + " " : "") + ch.textContent;
+      inp.focus();
+    };
+  });
+
+  $("saveBtn").onclick = async ()=>{
+    if(!uid || !currentChildId){ alert("ログイン/子ども選択が必要です"); return; }
+    try{
+      const edited = JSON.parse($("profileJson").textContent);
+      await setDoc(doc(db, "parents", uid, "profiles", currentChildId), edited, { merge:true });
+      alert("Firestoreに保存しました");
+    }catch(e){
+      alert("JSONが不正です。編集箇所を確認してください。");
+    }
+  };
+
+  $("reloadBtn").onclick = async ()=>{
+    if(!uid || !currentChildId) return;
+    const snap = await getDoc(doc(db, "parents", uid, "profiles", currentChildId));
+    if (snap.exists()) setProfile(snap.data());
+  };
+</script>
+</body>
+</html>
+
