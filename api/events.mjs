@@ -64,6 +64,20 @@ const cleanTitle = (label='') =>
 const urlLooksEvent = (u='') => /(event|events|workshop|ws|calendar|katsudou|news|exhibition)/.test(u.toLowerCase());
 
 export default async function handler(req, res) {
+  // ✅ ここに CORS ヘッダを追加
+  res.setHeader("Access-Control-Allow-Origin", "https://lukaluka222.github.io");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  // ✅ Preflight (OPTIONS) リクエストなら即終了
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  // ---- ここから本来の処理 ----
+
+
+
   let url;
   try { url = new URL(req.url, `https://${req.headers.host || 'example.com'}`); }
   catch { return send(res, { ok:true, note:'URL parse failed', items:[] }); }
