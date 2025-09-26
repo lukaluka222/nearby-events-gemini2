@@ -110,7 +110,15 @@
     <div class="sources" id="sources"></div>
   </footer>
 
+  
 <script>
+
+  // APIのベースURLを環境で切り替える
+const API_BASE =
+  location.hostname.endsWith('github.io')
+    ? 'https://nearby-events-gemini2.vercel.app/api' // GitHub Pages → VercelのAPIを叩く
+    : '/api';                                        // Vercel環境 → 相対でOK
+
 // タブ（プリセット）：先頭を「自然」に。おすすめは削除
 const PRESETS = ["自然","苔","手芸","編み物","木工","花屋","科学館","ガラス","竹細工"];
 
@@ -161,7 +169,7 @@ async function search(){
   const list = document.getElementById('list');
   list.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
 
-  const url = new URL('/api/events', window.location.origin);
+  const url = new URL(`${API_BASE}/events`);
   url.searchParams.set('q', q);
   url.searchParams.set('lat', LOC.lat);
   url.searchParams.set('lon', LOC.lon);
