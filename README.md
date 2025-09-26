@@ -13,15 +13,14 @@ GitHub Pagesの大元のURL: https://lukaluka222.github.io/nearby-events-gemini2
 - [イベント検索アプリ](https://lukaluka222.github.io/nearby-events-gemini2/index.html)  
 - [プロフィール登録アプリ](https://lukaluka222.github.io/nearby-events-gemini2/chat-mvp.html)  
 - [人生マップ（双六UI）](https://lukaluka222.github.io/nearby-events-gemini2/mentor-map.html)
-- [人生マップ管理（Admin）](https://lukaluka222.github.io/nearby-events-gemini2/mentor-admin.html)
+- おまけ[人生マップ管理（Admin）](https://lukaluka222.github.io/nearby-events-gemini2/mentor-admin.html)
 ※同じような内容物のpublicとdocsフォルダが2つ存在する理由→ docsフォルダはGitHub Pagesによる提出用です。docsフォルダを作りpublicの中身をコピペし、Vercel のAPIをフルURL指定で呼べるように少し中身を修正しました。
  
 ## ④アプリのログイン用IDまたはPassword（ある場合）
 なし
 
 ## ⑤工夫した点・こだわった点
-- 近所のイベント検索で、ゆくゆくは生成AIがその子の状況に合わせてイベントを作って提案もできるように（Youtubeの紹介されてるこの場所でこんなこともできるよというような）、無料のGeminiのAPIを使って制作したところ。
-- vercelのAPIを使って、
+- 近所のイベント検索で、ゆくゆくは生成AIがその子の状況に合わせてイベントを作って提案もできるように（Youtubeの紹介されてるこの場所でこんなこともできるよというような）、vercelや無料のGeminiのAPIを使って制作したところ。
 - 元不登校の先輩が、どんな人生を歩んだかを10ステップに分けたデータを貯めるときのデータ構造を、将来変更したり活用しやすいようにしたところ。
 
 ## ⑥難しかった点・次回トライしたいこと（又は機能）
