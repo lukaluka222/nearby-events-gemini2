@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>チャットでプロフィール作成（MVP）</title>
+<style>
+  :root{
+    --bg:#fffdf8;
+    --accent:#4f8cff;
+    --accent-soft:#e8f0ff;
+    --ink:#1e293b;
+    --muted:#6b7280;
+    --bubble-me:#4f8cff;
+    --bubble-me-text:#fff;
+    --bubble-you:#f1f5ff;
+    --bubble-sys:#fff0d6;
+    --card:#ffffff;
+    --border:#eef2f7;
+    --chip:#f9fafb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  header{
+    position:sticky;top:0;z-index:10;
+    background:linear-gradient(180deg,#fdfcff 0%, #fffdf8 100%);
+    border-bottom:1px solid var(--border);
+    padding:12px 16px;padding-top: max(12px, env(safe-area-inset-top));
+    display:flex;gap:8px;align-items:center;justify-content:space-between
+  }
+  header .title{font-weight:700;font-size:16px}
+  header .sub{color:var(--muted);font-size:12px}
+  header button{background:var(--accent);border:none;color:#fff;padding:8px 12px;border-radius:999px;font-weight:600}
+  main{display:flex;flex-direction:column;height:calc(100dvh - 64px)}
+  .chat{
+    flex:1;overflow:auto;padding:12px 12px 120px;scroll-behavior:smooth
+  }
+  .msg{display:flex;margin:8px 0;gap:8px;align-items:flex-end}
+  .msg .bubble{max-width:84%;padding:10px 12px;border-radius:18px;border:1px solid var(--border);word-wrap:break-word;white-space:pre-wrap}
+  .me{justify-content:flex-end}
+  .me .bubble{background:var(--bubble-me);color:var(--bubble-me-text);border-color:transparent;border-bottom-right-radius:6px}
+  .you .bubble{background:var(--bubble-you);border-bottom-left-radius:6px}
+  .sys .bubble{background:var(--bubble-sys);border-bottom-left-radius:6px}
+  .chips{position:sticky;bottom:72px;display:flex;gap:8px;overflow:auto;padding:8px 12px;background:linear-gradient(180deg,#fffdf8 40%,#ffffff 100%);border-top:1px solid var(--border)}
+  .chip{flex:0 0 auto;background:var(--chip);border:1px solid var(--border);padding:8px 10px;border-radius:999px;font-size:13px}
+  .composer{
+    position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--border);
+    padding:8px 12px;padding-bottom: max(8px, env(safe-area-inset-bottom));
+    display:flex;gap:8px;align-items:flex-end
+  }
+  textarea{flex:1;resize:none;border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff;font-size:15px;max-height:160px}
+  .send{background:var(--accent);color:#fff;border:none;border-radius:12px;padding:10px 14px;font-weight:700}
+  .toolbar{display:flex;gap:8px}
+  .pill{background:var(--accent-soft);color:#2b5cc4;border:none;border-radius:999px;padding:6px 10px;font-size:12px}
+  .panel{padding:8px 12px;border-top:1px dashed var(--border);font-size:13px;color:var(--muted)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .row input{flex:1 1 120px;padding:8px;border:1px solid var(--border);border-radius:8px}
+  .small{font-size:12px;color:var(--muted)}
+  .hint{font-size:12px;color:var(--muted);margin:4px 0 0}
+  .badge{background:#fff;border:1px solid var(--border);border-radius:8px;padding:4px 8px;font-size:12px;margin-right:6px}
+</style>
+
+<header>
+  <div>
+    <div class="title">プロフィール作成チャット</div>
+    <div class="sub"><span id="childLabel">子ども未選択</span></div>
+  </div>
+  <div class="toolbar">
+    <button id="switch">子ども</button>
+  </div>
+</header>
+
+<main>
+  <div id="chat" class="chat">
+    <div class="msg sys"><div class="bubble">こんにちは。お子さんの様子を教えてください。例）工作が好き／午前が元気／人混みが苦手／徒歩30分まで／1回2000円まで</div></div>
+  </div>
+
+  <!-- クイック入力チップ（プロフィール用） -->
+  <div class="chips" id="chips">
+    <button class="chip" data-field="timePreference" data-value="午前">午前が元気</button>
+    <button class="chip" data-field="timePreference" data-value="午後">午後が元気</button>
+    <button class="chip" data-field="noiseTolerance" data-value="静か">静かな場所が好き</button>
+    <button class="chip" data-field="noiseTolerance" data-value="にぎやかOK">にぎやかOK</button>
+    <button class="chip" data-field="distanceLimitWalkMin" data-value="15">徒歩15分</button>
+    <button class="chip" data-field="distanceLimitWalkMin" data-value="30">徒歩30分</button>
+    <button class="chip" data-field="budgetYen" data-value="1000">予算1000円</button>
+    <button class="chip" data-field="budgetYen" data-value="2000">予算2000円</button>
+  </div>
+
+  <!-- 入力バー -->
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="例）工作が大好きで、人混みは苦手。午前が元気。"></textarea>
+    <button class="send" id="send">送信</button>
+  </div>
+</main>
+
+<!-- 下部：プロフィールの現在値を軽く表示＆保存 -->
+<div class="panel" id="profilePanel">
+  <div><span class="badge">名前: <b id="namePreview">（未設定）</b></span>
+       <span class="badge">年齢: <b id="agePreview">-</b></span>
+       <span class="badge">徒歩: <b id="distPreview">-</b></span>
+       <span class="badge">予算: <b id="budgetPreview">-</b></span></div>
+  <div class="row">
+    <input id="name" placeholder="お子さんの名前（例：太郎）">
+    <input id="age" type="number" min="0" placeholder="年齢（例：13）">
+    <button class="pill" id="saveProfile">プロフィール保存</button>
+  </div>
+  <div class="hint">保存先：parents/{uid}/children/{childId} と notes（チャットログ）</div>
+</div>
+
+<script type="module">
+  // ===== Firebase（CDN） =====
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import {
+    getFirestore, collection, doc, addDoc, setDoc, getDocs, getDoc, query, where, orderBy, limit, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ★ あなたの Firebase 設定（3項目でOK）
+  const firebaseConfig = {
+  apiKey: "AIzaSyDA1g7BFkCNJzWfedaAwpkLX_MypeQBA-Q",
+  authDomain: "futoko-1f0db.firebaseapp.com",
+  projectId: "futoko-1f0db"
+  };
+
+  // ===== 初期化 =====
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const $ = (id)=>document.getElementById(id);
+  const chatEl = $("chat");
+  const inputEl = $("input");
+
+  let uid = null;
+  let currentChildId = null;
+  let profile = {
+    likes: [],
+    dislikes: [],
+    timePreference: null,
+    noiseTolerance: null,
+    distanceLimitMin: 0,
+    distanceLimitWalkMin: null,
+    budgetYen: null,
+    notes: ""
+  };
+
+  // 匿名ログイン
+  await signInAnonymously(auth);
+  uid = auth.currentUser.uid;
+
+  // 子ども切替（簡易セレクタ）
+  $("switch").onclick = async ()=>{
+    const list = await getDocs(collection(db,"parents",uid,"children"));
+    const items = [];
+    list.forEach(d=> items.push({ id:d.id, ...d.data() }));
+    const names = items.map(c=> `${c.displayName??"(名無し)"} | ${c.id}`);
+    const pick = prompt(
+      "子どもを選ぶか、新規IDを入力してください。\n" +
+      (names.length? `\n--- 既存 ---\n${names.join("\n")}\n\n` : "") +
+      "新規作成するなら、名前を入力してください（例：太郎）"
+    );
+    if(!pick) return;
+
+    const found = items.find(x=> pick.includes(x.id) || pick === x.displayName);
+    if(found){
+      await selectChild(found.id, found);
+    }else{
+      // 新規作成（自動ID）
+      const age = Number(prompt("年齢（任意）を入力:") || "") || null;
+      const ref = await addDoc(collection(db,"parents",uid,"children"), {
+        displayName: pick, age, profile: {}, createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+      });
+      await selectChild(ref.id, { displayName: pick, age, profile:{} });
+    }
+  };
+
+  async function selectChild(id, data){
+    currentChildId = id;
+    const snap = data ? { data:()=>data } : await getDoc(doc(db,"parents",uid,"children",id));
+    const d = snap.data() || {};
+    profile = { ...{
+      likes:[],dislikes:[],timePreference:null,noiseTolerance:null,
+      distanceLimitMin:0,distanceLimitWalkMin:null,budgetYen:null,notes:""
+    }, ...(d.profile||{}) };
+    $("childLabel").textContent = (d.displayName??"(名無し)") + " / " + id;
+    $("name").value = d.displayName ?? "";
+    $("age").value = d.age ?? "";
+    updatePreview();
+    renderSystem(`「${d.displayName??"（名無し）"}」を選択しました。興味や苦手を教えてください。`);
+    await loadRecentNotes();
+  }
+
+  // 初回：子が無いなら作成を促す
+  (async()=>{
+    const list = await getDocs(collection(db,"parents",uid,"children"));
+    if(list.empty){
+      renderSystem("まず右上「子ども」→ 新規作成してください。");
+    }else{
+      // 最初の1件を選択
+      const first = list.docs[0]; await selectChild(first.id, first.data());
+    }
+  })();
+
+  // ========== チャットUI ==========
+  function renderMe(text){ appendMsg("me", text); }
+  function renderYou(text){ appendMsg("you", text); }
+  function renderSystem(text){ appendMsg("sys", text); }
+  function appendMsg(who, text){
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + who;
+    const b = document.createElement("div");
+    b.className = "bubble";
+    b.textContent = text;
+    wrap.appendChild(b);
+    chatEl.appendChild(wrap);
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  // 送信 → notes に保存
+  $("send").onclick = async ()=>{
+    const t = inputEl.value.trim();
+    if(!t) return;
+    renderMe(t);
+    inputEl.value = "";
+    if(!currentChildId){ renderSystem("まず右上の『子ども』から選択/作成してください。"); return; }
+    await addDoc(collection(db,"parents",uid,"notes"),{
+      childId: currentChildId, text: t, createdAt: serverTimestamp()
+    });
+    // 簡易抽出：よくある表現をprofileに反映（※AIなしMVP）
+    applyHeuristics(t);
+    updatePreview();
+  };
+
+  // 最新メモ（10件）
+  async function loadRecentNotes(){
+    const q1 = query(
+      collection(db,"parents",uid,"notes"),
+      where("childId","==",currentChildId),
+      orderBy("createdAt","desc"),
+      limit(10)
+    );
+    const snap = await getDocs(q1);
+    const rows = [];
+    snap.forEach(d=> rows.push(d.data()));
+    rows.reverse().forEach(r=> renderYou(r.text));
+  }
+
+  // クイックチップ → プロフィールに反映
+  document.querySelectorAll(".chip").forEach(chip=>{
+    chip.onclick = ()=>{
+      const field = chip.dataset.field;
+      const v = isNaN(Number(chip.dataset.value)) ? chip.dataset.value : Number(chip.dataset.value);
+      profile[field] = v;
+      renderSystem(`設定：${field} = ${v}`);
+      updatePreview();
+    };
+  });
+
+  // 名前/年齢 → プレビュー
+  function updatePreview(){
+    $("namePreview").textContent = $("name").value || "（未設定）";
+    $("agePreview").textContent = $("age").value || "-";
+    $("distPreview").textContent = profile.distanceLimitWalkMin? (profile.distanceLimitWalkMin+"分") : "-";
+    $("budgetPreview").textContent = profile.budgetYen? (profile.budgetYen+"円") : "-";
+  }
+  $("name").oninput = updatePreview;
+  $("age").oninput = updatePreview;
+
+  // プロフィール保存（children/{childId}）
+  $("saveProfile").onclick = async ()=>{
+    if(!currentChildId){ alert("子どもを選択/作成してください"); return; }
+    const displayName = $("name").value.trim() || "ななし";
+    const age = $("age").value ? Number($("age").value) : null;
+    await setDoc(doc(db,"parents",uid,"children",currentChildId),{
+      displayName, age, profile, updatedAt: serverTimestamp()
+    }, { merge:true });
+    renderSystem("プロフィールを保存しました。");
+  };
+
+  // 簡易ヒューリスティック（MVP用）：日本語の典型表現から項目に反映（AIなし）
+  function applyHeuristics(t){
+    // likes
+    if(/工作|クラフト|手作り|作るの/.test(t)) addLike("工作");
+    if(/科学|実験/.test(t)) addLike("科学実験");
+    if(/読書|本/.test(t)) addLike("読書");
+    if(/スポーツ|運動|サッカー|バスケ|ランニング/.test(t)) addLike("運動");
+    // timePreference
+    if(/午前/.test(t)) profile.timePreference = "午前";
+    if(/午後/.test(t)) profile.timePreference = "午後";
+    if(/夕方|夜/.test(t)) profile.timePreference = "夕方";
+    // noiseTolerance
+    if(/静か|静かな?場所/.test(t)) profile.noiseTolerance = "静か";
+    if(/にぎやか|大人数|音楽が大きい|賑やか/.test(t)) profile.noiseTolerance = "にぎやかOK";
+    if(/苦手.*人混み|人混み.*苦手|大音量.*苦手/.test(t)) profile.noiseTolerance = "静か";
+    // distance
+    const m1 = t.match(/徒歩?(\d{1,2})\s*分/); if(m1) profile.distanceLimitWalkMin = Number(m1[1]);
+    // budget
+    const b1 = t.match(/(\d{3,5})\s*円/); if(b1) profile.budgetYen = Number(b1[1]);
+  }
+  function addLike(x){
+    if(!profile.likes.includes(x)) profile.likes.push(x);
+  }
+</script>
+</html>
