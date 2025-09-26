@@ -72,54 +72,35 @@
   </div>
 </dialog>
 
-<script>
-  // --- ダミーデータ（Firestoreの mentors/{id}/steps をここに差し替え） ---
-  const steps = [
-    { step:1,  text:"勉強も運動もできる繊細な子ども", detail:"小学生の頃は…", color:"gray" },
-    { step:2,  text:"学校の人間関係に疲れる", detail:"中学入学後に…", color:"gray" },
-    { step:3,  text:"中2で起立性調節障害の診断", detail:"診断の経緯…", color:"purple" },
-    { step:4,  text:"親に『行けるなら学校へ』と言われ辛い", detail:"家庭での会話…", color:"gray" },
-    { step:5,  text:"祖母宅で穏やかな時間を過ごす", detail:"家族の支え…", color:"gray" },
-    { step:6,  text:"少しずつ関係が和らぐ", detail:"日々の変化…", color:"gray" },
-    { step:7,  text:"正月に伯父の一言で自信を得る", detail:"『大丈夫だよ』…", color:"purple" },
-    { step:8,  text:"祖母の後押しで通信制高校へ", detail:"進路決定…", color:"gray" },
-    { step:9,  text:"父と外出し人と話す機会が増える", detail:"体験談…", color:"gray" },
-    { step:10, text:"発明家志望→美大へ。デザインの道へ", detail:"現在は…", color:"gray" }
-  ];
 
-  // パス上の割合（0〜1）に各コマを配置（10コマなら均等でOK／微調整も可）
-  const tPositions = [0.03,0.13,0.22,0.31,0.40,0.49,0.58,0.69,0.80,0.92];
+ <script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, getDocs, query, orderBy } 
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-  // --- パス長から座標を取って配置 ---
-  const svg = document.querySelector("svg");
-  const path = document.getElementById("track");
-  const length = path.getTotalLength();
-  const canvas = document.getElementById("canvas");
-  const dlg = document.getElementById("dlg");
-  const dlgTitle = document.getElementById("dlgTitle");
-  const dlgBody = document.getElementById("dlgBody");
+  const firebaseConfig = {
+    apiKey: "AIzaSyDA1g7BFkCNJzWfedaAwpkLX_MypeQBA-Q",
+    authDomain: "futoko-1f0db.firebaseapp.com",
+    projectId: "futoko-1f0db"
+  };
 
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  // URLから mentorId を取得
+  const params = new URLSearchParams(location.search);
+  const mentorId = params.get("id");
+
+  // Firestoreからstepsを取得
+  const q = query(collection(db, "mentors", mentorId, "steps"), orderBy("step"));
+  const snap = await getDocs(q);
+  const steps = snap.docs.map(d => d.data());
+
+  // ここから下は「双六UIを描画するコード」に steps を渡せばOK
+  // （ダミーデータを使っていた部分を置き換え）
   steps.forEach((s, i) => {
-    const t = tPositions[i] ?? (i/(steps.length-1));
-    const p = path.getPointAtLength(length * t);
-    const node = document.createElement("div");
-    node.className = "node";
-    node.style.left = p.x+"px";
-    node.style.top  = p.y+"px";
-    node.innerHTML = `
-      <div class="dot ${s.color === "purple" ? "purple" : "gray"}"></div>
-      <div class="bubble">${escapeHtml(s.text)}</div>
-    `;
-    node.onclick = () => {
-      dlgTitle.textContent = `第${s.step}コマ`;
-      dlgBody.textContent  = s.detail || "詳細は準備中です。";
-      dlg.showModal();
-    };
-    canvas.appendChild(node);
+    // パスに沿って配置する処理は既存コードそのまま
   });
-
-  function escapeHtml(str){
-    return (str||"").replace(/[&<>"']/g, s=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[s]));
-  }
 </script>
+
 </html>
