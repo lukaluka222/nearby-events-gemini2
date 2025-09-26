@@ -1,11 +1,15 @@
-// api/events.mjs — 診断版（各段階の件数を返す & 最終フォールバックあり）
+// api/events.js — 相模原向けおすすめ強化版（軽量スクレイプ→リンク抽出→フィルタ＆スコア）
+// ※ express 等は不要。vercel の Serverless Function としてそのまま動きます。
+
+const BUILD = 'events.js recsys-light v2 (bright UI)';
 
 function send(res, obj) {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.end(JSON.stringify(obj));
+  res.end(JSON.stringify({ build: BUILD, ...obj }));
 }
 
+// — 対象サイト（必要に応じて足してOK）
 const SOURCES = [
   'https://www.city.sagamihara.kanagawa.jp/event_calendar.html',
   'https://sagamiharacitymuseum.jp/event/',
@@ -15,37 +19,48 @@ const SOURCES = [
   'https://www.e-sagamihara.com/event/'
 ];
 
-const GENERIC = ['イベント','体験','ワークショップ','講座','教室','観察','自然','展示','工作','工房','ミッション'];
+// — 相模原/近隣の優先ドメイン
+const PRIORITY_DOMAINS = [
+  'city.sagamihara.kanagawa.jp',
+  'sagamiharacitymuseum.jp',
+  'sagamigawa-fureai.com',
+  'fujino-art.jp',
+  'e-sagamihara.com',
+  'pref.kanagawa.jp',
+  'kanagawa-park.or.jp',
+  'jalps.org', // 県立相模原公園などがぶら下がる場合に備え（必要なら変更）
+];
+
+// — 地名キーワード
+const LOCATION_WORDS = [
+  '相模原','緑区','中央区','南区','橋本','淵野辺','相模大野','相模湖',
+  '城山','藤野','愛川','座間','町田','八王子','高尾','厚木'
+];
+
+// — イベントっぽい語
+const EVENTISH = [
+  'イベント','体験','ワークショップ','講座','教室','展示','観察','見学',
+  '工作','工房','フェア','マルシェ','まつり','祭','ハンズオン','セミナー',
+  '天体観望','星空','プラネタリウム','自然観察','ガイドツアー','クラフト'
+];
+
+// — ノイズ（お知らせ・入札・採用等）除外
+const TITLE_BLACKLIST = [
+  '入札','落札','公告','指名停止','募集要項','公募型','交通規制',
+  '税','納付','確定申告','防災','注意喚起','詐欺','選挙','議会',
+  '採用','人事','求人','条例','告示','コロナ','新型'
+];
 
 const UA_HEADERS = { 'User-Agent':'Mozilla/5.0', 'Accept-Language':'ja-JP,ja;q=0.9' };
-
 const norm = (s='') => s.toString().normalize('NFKC').toLowerCase();
 
-function expandTerms(qRaw=''){
-  const q = norm(qRaw);
-  const terms = new Set();
-  if(!q) return [];
-  terms.add(q);
-  if(q.includes('苔') || q.includes('こけ') || q.includes('ｺｹ')){
-    ['苔','こけ','コケ','苔玉','テラリウム','苔観察','苔の観察','苔庭'].forEach(t=>terms.add(norm(t)));
-  }
-  if(q.includes('手芸')){
-    ['手芸','ハンドメイド','クラフト','刺し子','刺繍','裁縫','ミシン','ビーズ','フェルト','羊毛フェルト','布小物'].forEach(t=>terms.add(norm(t)));
-  }
-  if(q.includes('編み') || q.includes('あみ') || q.includes('ﾆｯﾄ') || q.includes('ニット')){
-    ['編み物','かぎ編み','棒針編み','ニット','マフラー','アミグルミ'].forEach(t=>terms.add(norm(t)));
-  }
-  if(q.includes('木工') || q.includes('木')){
-    ['木工','木の工作','DIY','クラフト','木材','工房体験'].forEach(t=>terms.add(norm(t)));
-  }
-  if(q.includes('花') || q.includes('ﾌﾗﾜｰ') || q.includes('フラワー')){
-    ['花屋','フラワー','ブーケ','アレンジメント','生け花','ドライフラワー'].forEach(t=>terms.add(norm(t)));
-  }
-  if(q.includes('科学') || q.includes('科学館')){
-    ['科学','科学館','工作','実験','観察','天体観望','星空','プラネタ','プラネタリウム'].forEach(t=>terms.add(norm(t)));
-  }
-  return [...terms];
-}
+const cleanTitle = (label='') =>
+  label.replace(/[【】「」『』［］\[\]（）()]/g,' ').replace(/\s+/g,' ').trim();
+
+const urlLooksEvent = (u='') =>
+  /(event|events|workshop|ws|calendar|katsudou|exhibition|eventnews)/.test((u||'').toLowerCase());
+
+function hasAny(s, words){ const n = norm(s); return words.some(w => n.includes(norm(w))); }
 
 function extractWhen(label='') {
   const s = label.replace(/\s+/g,' ');
@@ -58,14 +73,34 @@ function extractWhen(label='') {
   return '';
 }
 
-const cleanTitle = (label='') =>
-  label.replace(/[【】「」『』［］\[\]（）()]/g,' ').replace(/\s+/g,' ').trim();
-
-const urlLooksEvent = (u='') => /(event|events|workshop|ws|calendar|katsudou|news|exhibition)/.test(u.toLowerCase());
+function expandTerms(qRaw=''){
+  const q = norm(qRaw);
+  const t = new Set();
+  if(!q) return [];
+  t.add(q);
+  if (q.includes('苔')||q.includes('こけ')||q.includes('ｺｹ')) {
+    ['苔','こけ','コケ','苔玉','テラリウム','苔観察','苔庭'].forEach(x=>t.add(norm(x)));
+  }
+  if (q.includes('手芸')||q.includes('クラフト')||q.includes('ハンドメイド')) {
+    ['手芸','ハンドメイド','クラフト','刺繍','裁縫','ビーズ','フェルト','羊毛フェルト'].forEach(x=>t.add(norm(x)));
+  }
+  if (q.includes('編み')||q.includes('ニット')) {
+    ['編み物','かぎ編み','棒針編み','ニット','アミグルミ'].forEach(x=>t.add(norm(x)));
+  }
+  if (q.includes('木工')||q.includes('木')) {
+    ['木工','木の工作','DIY','工房体験'].forEach(x=>t.add(norm(x)));
+  }
+  if (q.includes('花')||q.includes('フラワー')) {
+    ['花屋','ブーケ','フラワーアレンジメント','生け花','ドライフラワー'].forEach(x=>t.add(norm(x)));
+  }
+  if (q.includes('科学')||q.includes('科学館')||q.includes('天体')) {
+    ['科学','科学館','工作','実験','観察','天体観望','星空','プラネタリウム'].forEach(x=>t.add(norm(x)));
+  }
+  return [...t];
+}
 
 export default async function handler(req, res) {
-  let url;
-  try { url = new URL(req.url, `https://${req.headers.host || 'example.com'}`); }
+  let url; try { url = new URL(req.url, `https://${req.headers.host || 'example.com'}`); }
   catch { return send(res, { ok:true, note:'URL parse failed', items:[] }); }
 
   const mode  = url.searchParams.get('mode') || '';
@@ -73,24 +108,21 @@ export default async function handler(req, res) {
   const qNorm = norm(qRaw);
   const debug = url.searchParams.get('debug') === '1';
 
-  // ---- モック（確認用） ----
+  // --- mock（動作確認用） ---
   if (mode === 'mock') {
     const LINKS = [
       { url:'https://example.com/koke1', label:'苔の観察ワークショップ（相模原）' },
-      { url:'https://example.com/koke2', label:'川辺でコケ観察ミッション' },
-      { url:'https://example.com/tegei1', label:'手芸（刺し子）はじめて教室' },
-      { url:'https://example.com/ami1',  label:'編み物ミニワークショップ' },
-      { url:'https://example.com/mokko', label:'木工フリーワーク' },
-      { url:'https://example.com/hanaya',label:'花屋のミニブーケづくり体験' }
+      { url:'https://example.com/ami1',  label:'編み物ミニワークショップ in 橋本' },
+      { url:'https://example.com/hanaya',label:'花屋のミニブーケづくり体験（相模大野）' }
     ];
     const terms = expandTerms(qRaw);
     const hit = terms.length
       ? LINKS.filter(x => terms.some(t => norm(x.label).includes(t)))
       : (qNorm ? LINKS.filter(x => norm(x.label).includes(qNorm)) : LINKS);
-    return send(res, { ok:true, from:'mock', q:qRaw, count:hit.length, sample:hit.slice(0,8) });
+    return send(res, { ok:true, mode:'mock', q:qRaw, count:hit.length, sample:hit.slice(0,8) });
   }
 
-  // ---- 実サイトからリンク収集 ----
+  // --- 収集 ---
   const links = [];
   for (const src of SOURCES) {
     try {
@@ -104,68 +136,76 @@ export default async function handler(req, res) {
         let abs = href; try { abs = new URL(href, src).toString(); } catch {}
         links.push({ url:abs, label, labelN:norm(label) });
       }
-    } catch {
-      // サイト1つ失敗しても続行
-    }
+    } catch {}
   }
 
-  // ---- 段階フィルタ（途中の件数を全部計測） ----
-  const diags = {
-    q: qRaw,
-    total_links: links.length,
-    counts: {}
-  };
-
+  // --- 前処理（スコアリング） ---
   const terms = expandTerms(qRaw);
-  let step1 = [];
-  if (terms.length) step1 = links.filter(L => terms.some(t => L.labelN.includes(t)));
-  diags.counts.match_terms = step1.length;
+  const scored = links.map(L => {
+    let score = 0;
+    // ノイズ除外（タイトル）
+    if (hasAny(L.label, TITLE_BLACKLIST)) score -= 100;
 
-  let step2 = step1.length ? step1 : (qNorm ? links.filter(L => L.labelN.includes(qNorm)) : []);
-  diags.counts.match_q = step2.length;
+    // イベントらしさ
+    if (urlLooksEvent(L.url)) score += 4;
+    if (hasAny(L.label, EVENTISH)) score += 6;
 
-  const genN = GENERIC.map(norm);
-  let step3 = step2.length ? step2 : links.filter(L => genN.some(g => L.labelN.includes(g)) || urlLooksEvent(L.url));
-  diags.counts.generic_or_url = step3.length;
+    // 地名加点
+    if (hasAny(L.label, LOCATION_WORDS)) score += 6;
 
-  let finalList = step3.length ? step3 : links.slice(0, 50); // それでも0なら素の先頭50件
-  diags.counts.finalList = finalList.length;
+    // ドメイン加点
+    try {
+      const host = new URL(L.url).host.replace(/^www\./,'');
+      if (PRIORITY_DOMAINS.includes(host)) score += 8;
+    } catch {}
 
-  // 重複 & ドメイン上限
+    // クエリ一致（おすすめ＝q空の時は 0）
+    if (terms.length && terms.some(t => L.labelN.includes(t))) score += 10;
+    else if (!terms.length && qNorm && L.labelN.includes(qNorm)) score += 6;
+
+    return { ...L, score };
+  });
+
+  // 負スコア（ノイズ）を除外
+  let cand = scored.filter(x => x.score >= (qNorm ? 6 : 8));
+
+  // それでも少ない時は緩める
+  if (cand.length < 6) cand = scored.filter(x => x.score >= (qNorm ? 4 : 6));
+  if (cand.length < 6) cand = scored.slice(); // 最終的にゼロは避ける
+
+  // 重複とドメイン上限（広め）
   const byUrl = new Map();
-  const perDomainCap = 4;
   const domainCount = {};
-  const capped = [];
-  for (const L of finalList) {
-    if (byUrl.has(L.url)) continue;
-    byUrl.set(L.url, true);
-    let host=''; try { host = new URL(L.url).host.replace(/^www\./,''); } catch {}
-    domainCount[host] = (domainCount[host] || 0) + 1;
+  const perDomainCap = 6;
+  const kept = [];
+  for (const c of cand.sort((a,b)=> (b.score - a.score))) {
+    if (byUrl.has(c.url)) continue;
+    byUrl.set(c.url, true);
+    let host=''; try { host = new URL(c.url).host.replace(/^www\./,''); } catch {}
+    domainCount[host] = (domainCount[host]||0) + 1;
     if (host && domainCount[host] > perDomainCap) continue;
-    capped.push(L);
-    if (capped.length >= 20) break;
+    kept.push(c);
+    if (kept.length >= 20) break;
   }
-  diags.counts.capped = capped.length;
 
-  // ---- mode=links（診断表示） ----
+  // 診断モード
   if (mode === 'links') {
-    const sample = capped.slice(0,12).map(L => ({ url:L.url, label:L.label }));
-    return send(res, { ok:true, ...diags, sample });
+    const sample = kept.slice(0,12).map(L => ({ url:L.url, label:L.label, score:L.score }));
+    return send(res, { ok:true, mode:'links', q:qRaw, total_links:links.length, kept:kept.length, sample });
   }
 
-  // ---- 通常モード：イベント配列に整形 ----
-  const events = capped.map(L => ({
+  // イベント配列へ整形（簡易）
+  const events = kept.map(L => ({
     title: cleanTitle(L.label),
     description: '',
-    place: '',
-    lat: null,
-    lon: null,
-    price: null,
+    place: hasAny(L.label, LOCATION_WORDS) ? '相模原・近隣' : '',
+    lat: null, lon: null, price: null,
     when: extractWhen(L.label),
     tags: qRaw ? [qRaw] : [],
-    url: L.url
+    url: L.url,
+    score: L.score
   }));
 
-  if (debug) return send(res, { ok:true, ...diags, sample: events.slice(0,8) });
+  if (debug) return send(res, { ok:true, mode:'normal', q:qRaw, sample: events.slice(0,8) });
   return send(res, events);
 }
