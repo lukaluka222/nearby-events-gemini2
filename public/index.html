@@ -5,40 +5,85 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>近所イベント検索（相模原）</title>
   <style>
-    :root{--bg:#0b1116;--card:#111a22;--ink:#e8f0f7;--muted:#9fb2c3;--line:#1a2a36;--accent:#4cc3ff;--ok:#6ee7b7}
+    /* —— 明るいトーン —— */
+    :root{
+      --bg:#f6f9fc;
+      --card:#ffffff;
+      --ink:#1b2630;
+      --muted:#5a6b77;
+      --line:#e3ecf2;
+      --accent:#0ea5e9; /* ボタン */
+      --ok:#10b981;     /* スコア */
+      --chip:#eef6fb;
+      --chip-on:#dff1ff;
+      --skeleton1:#eef4f8;
+      --skeleton2:#e7f0f6;
+    }
     *{box-sizing:border-box}
     html,body{height:100%}
-    body{margin:0;background:linear-gradient(180deg,#071018,#0b1116);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Hiragino Kaku Gothic ProN","Yu Gothic UI","Noto Sans JP",sans-serif}
-    header{position:sticky;top:0;z-index:5;background:rgba(7,16,24,.9);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
+    body{
+      margin:0;
+      color:var(--ink);
+      background:
+        radial-gradient(800px 300px at 20% -10%, #ffffff 0%, #f2f8ff 40%, #f6f9fc 100%);
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Hiragino Kaku Gothic ProN","Yu Gothic UI","Noto Sans JP",sans-serif
+    }
+    header{
+      position:sticky;top:0;z-index:5;
+      background:rgba(255,255,255,.85);
+      backdrop-filter:saturate(1.2) blur(8px);
+      border-bottom:1px solid var(--line)
+    }
     .hrow{display:flex;gap:8px;align-items:center;padding:10px 12px}
-    .logo{font-weight:700;letter-spacing:.02em}
+    .logo{font-weight:800;letter-spacing:.02em}
     .loc{margin-left:auto;font-size:12px;color:var(--muted)}
     .search{display:flex;gap:8px;padding:6px 12px 12px}
-    .search input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);background:#0a141c;color:var(--ink)}
-    .btn{display:inline-flex;align-items:center;gap:6px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:#0c1620;color:var(--ink);cursor:pointer}
-    .btn.primary{background:linear-gradient(90deg,#21a1f1,#4cc3ff);color:#05131c;border:0;font-weight:700}
-    .toolbar{display:flex;gap:8px;padding:0 12px 8px;overflow-x:auto}
-    .chip{white-space:nowrap;border:1px solid var(--line);background:#0c1620;padding:8px 10px;border-radius:999px;font-size:13px;cursor:pointer}
-    .chip.active{outline:2px solid #1d3647;background:#0e1c26}
+    .search input{
+      flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);
+      background:#fff;color:var(--ink);box-shadow:0 1px 0 #00000008 inset
+    }
+    .btn{
+      display:inline-flex;align-items:center;gap:6px;padding:10px 12px;border-radius:12px;
+      border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer
+    }
+    .btn.primary{
+      background:linear-gradient(90deg,#38bdf8,#0ea5e9);color:#073042;border:0;font-weight:700
+    }
+    .toolbar{display:flex;gap:8px;padding:0 12px 10px;overflow-x:auto}
+    .chip{
+      white-space:nowrap;border:1px solid var(--line);background:var(--chip);
+      padding:8px 10px;border-radius:999px;font-size:13px;cursor:pointer;color:#0b3a4c
+    }
+    .chip.active{outline:2px solid #bfe7ff;background:var(--chip-on)}
 
-    main{padding:10px;max-width:680px;margin:0 auto}
+    main{padding:12px;max-width:720px;margin:0 auto}
     .cards{display:grid;grid-template-columns:1fr;gap:10px}
-    .card{border:1px solid var(--line);background:linear-gradient(180deg,#0e1821,#0b141c);border-radius:16px;overflow:hidden}
-    .ph{height:140px;background:linear-gradient(120deg,rgba(76,195,255,.25),rgba(110,231,183,.15));border-bottom:1px solid var(--line)}
+    .card{
+      border:1px solid var(--line);background:var(--card);border-radius:16px;overflow:hidden;
+      box-shadow:0 6px 16px rgba(8,38,58,.06)
+    }
+    .ph{height:120px;background:linear-gradient(120deg,#e6f6ff,#f3fbff)}
     .body{padding:10px 12px}
     h3{margin:2px 0 6px;font-size:16px}
     .meta{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
     .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-    .tag{font-size:11px;color:#072133;background:#cfefff;border-radius:999px;padding:3px 8px;color:#062033}
+    .tag{font-size:11px;background:#e6f6ff;border:1px solid #d1ecff;border-radius:999px;padding:3px 8px;color:#06445a}
     .cta{display:flex;gap:8px;padding:10px 12px 12px}
-    .score{margin-left:auto;font-weight:700;color:#041016;background:#a7f3d0;border-radius:10px;padding:4px 8px}
+    .score{margin-left:auto;font-weight:700;color:#054; background:#c7f7e6;border:1px solid #aaf1d6;border-radius:10px;padding:4px 8px}
 
-    .skeleton{height:92px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(90deg,#0f1a23 0%,#122030 40%,#0f1a23 80%);background-size:200% 100%;animation:sk 1.2s infinite}
+    .skeleton{
+      height:92px;border:1px solid var(--line);border-radius:14px;
+      background:linear-gradient(90deg,var(--skeleton1) 0%,var(--skeleton2) 40%,var(--skeleton1) 80%);
+      background-size:200% 100%;animation:sk 1.2s infinite
+    }
     @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
 
-    footer{position:sticky;bottom:0;background:rgba(7,16,24,.9);backdrop-filter:blur(6px);border-top:1px solid var(--line);padding:8px 12px}
+    footer{
+      position:sticky;bottom:0;background:rgba(255,255,255,.85);
+      backdrop-filter:blur(8px);border-top:1px solid var(--line);padding:8px 12px
+    }
     .sources{display:flex;gap:8px;overflow-x:auto}
-    .src{white-space:nowrap;font-size:12px;border:1px solid var(--line);padding:8px 10px;border-radius:10px;background:#0c1620}
+    .src{white-space:nowrap;font-size:12px;border:1px solid var(--line);padding:8px 10px;border-radius:10px;background:#fff}
     .muted{color:var(--muted)}
   </style>
 </head>
@@ -49,7 +94,7 @@
       <div class="loc" id="loc">位置未取得</div>
     </div>
     <div class="search">
-      <input id="q" placeholder="例：苔／手芸／木工／花屋／科学館" />
+      <input id="q" placeholder="例：おすすめ／苔／手芸／木工／花屋／科学館" />
       <button class="btn" id="geo">現在地</button>
       <button class="btn primary" id="go">検索</button>
     </div>
@@ -66,9 +111,9 @@
   </footer>
 
 <script>
-// ▼▼ ここから JS ▼▼
+/* ——— UI は明るく、挙動は従来のまま ——— */
 
-// 1) プリセットチップ（先頭に「おすすめ」を追加）
+// 1) プリセット（「おすすめ」先頭 & 初期選択）
 const PRESETS = ["おすすめ","苔","手芸","編み物","木工","花屋","科学館","ガラス","竹細工","自然観察"];
 
 // 2) 位置
@@ -77,16 +122,7 @@ let LOC = { lat:35.5710, lon:139.3707 };
 function updateLocLabel(){ locEl.textContent = `${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)}` }
 updateLocLabel();
 
-// 3) 距離
-function dist(a,b){
-  const R=6371, toRad=d=>d*Math.PI/180;
-  const dLat=toRad(b.lat-a.lat), dLon=toRad(b.lon-a.lon);
-  const la=toRad(a.lat), lb=toRad(b.lat);
-  const h=Math.sin(dLat/2)**2 + Math.cos(la)*Math.cos(lb)*Math.sin(dLon/2)**2;
-  return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));
-}
-
-// 4) 描画（API結果のみ表示）
+// 3) 描画
 function render(items){
   const list=document.getElementById('list');
   const empty=document.getElementById('empty');
@@ -101,7 +137,7 @@ function render(items){
       <div class="body">
         <h3>${it.title||'（無題）'}</h3>
         <div class="meta">
-          <span>${it.source||'API'}</span>
+          <span>${it.source||new URL(it.url||'#').host.replace(/^www\./,'')}</span>
           <span>${it.place||''}</span>
           <span>距離 ${meta.d??'?'}km</span>
           <span>価格 ${typeof it.price==='number' ? (it.price+'円') : '無料/未定'}</span>
@@ -117,15 +153,13 @@ function render(items){
     list.appendChild(el);
   });
 }
-
 function openMap(lat,lon,title){
   const q=encodeURIComponent(`${lat},${lon} (${title})`);
   window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank');
 }
 
-// 5) 検索
+// 4) 検索（おすすめ = q空で /api 側に任せる）
 async function search(preset=null){
-  // 「おすすめ」ならクエリは空文字で API に任せる
   const qInput = document.getElementById('q');
   const q = (preset === 'おすすめ') ? '' : (qInput.value.trim());
 
@@ -143,31 +177,20 @@ async function search(preset=null){
   try {
     const res = await fetch(url);
     const data = await res.json();
-    console.log('API result', data);
-
     if (Array.isArray(data) && data.length) {
       const ranked = data.map(it => {
         const d = (typeof it.distance_km === 'number') ? it.distance_km.toFixed(1) : '?';
-        return {
-          it: {
-            title: it.title || '（無題）',
-            tags: Array.isArray(it.tags) ? it.tags : [],
-            place: it.place || '',
-            lat: (typeof it.lat === 'number') ? it.lat : LOC.lat,
-            lon: (typeof it.lon === 'number') ? it.lon : LOC.lon,
-            price: (typeof it.price === 'number') ? it.price : null,
-            when: it.when || '',
-            url: it.url || '#',
-            source: 'API'
-          },
-          meta: { s: it.score ?? 0, d }
-        };
+        return { it: {
+          title: it.title||'（無題）', tags: Array.isArray(it.tags)?it.tags:[],
+          place: it.place||'', lat: (typeof it.lat==='number')?it.lat:LOC.lat,
+          lon: (typeof it.lon==='number')?it.lon:LOC.lon, price: (typeof it.price==='number')?it.price:null,
+          when: it.when||'', url: it.url||'#', source: 'API'
+        }, meta:{ s: it.score??0, d }};
       });
       render(ranked);
       updateSourceLinks(q || '体験 ワークショップ');
       return;
     }
-    console.log('API empty');
     render([]);
     updateSourceLinks(q || '体験 ワークショップ');
   } catch (e) {
@@ -177,19 +200,18 @@ async function search(preset=null){
   }
 }
 
-// 6) 位置取得ボタン
+// 5) 位置ボタン
 document.getElementById('geo').addEventListener('click',()=>{
   if(!navigator.geolocation){alert('位置情報が使えません');return}
   navigator.geolocation.getCurrentPosition((p)=>{
     LOC={lat:p.coords.latitude,lon:p.coords.longitude};
     updateLocLabel();
-    // 現在地更新後も、今アクティブなチップで再検索
     const active = document.querySelector('.chip.active')?.textContent || 'おすすめ';
     search(active);
-  },(e)=>{alert('位置情報の取得に失敗しました');console.warn(e)},{enableHighAccuracy:true,timeout:8000});
+  },()=>{alert('位置情報の取得に失敗しました')},{enableHighAccuracy:true,timeout:8000});
 });
 
-// 7) プリセットチップ（「おすすめ」を先頭・初期選択）
+// 6) プリセット＆初回「おすすめ」自動検索
 const chipsEl=document.getElementById('chips');
 PRESETS.forEach(t=>{
   const b=document.createElement('button'); b.className='chip'; b.textContent=t;
@@ -200,29 +222,26 @@ PRESETS.forEach(t=>{
   });
   chipsEl.appendChild(b);
 });
-
-// 8) 初回：おすすめを自動選択して検索
 window.addEventListener('DOMContentLoaded', ()=>{
   const first = document.querySelector('.chip');
   if (first) {
-    first.classList.add('active');          // 見た目：おすすめON
-    document.getElementById('q').value='';  // 入力欄は空
-    search('おすすめ');                     // すぐリスト表示
+    first.classList.add('active');
+    document.getElementById('q').value='';
+    search('おすすめ');
   }
 });
 
-// 9) 検索ボタン/Enter
-document.getElementById('go').addEventListener('click', ()=> {
+// 7) 検索ボタン/Enter
+document.getElementById('go').addEventListener('click', ()=>{
   const active = document.querySelector('.chip.active')?.textContent || '';
-  // おすすめが選ばれていて自由入力された場合は入力値で検索
   search(active || null);
 });
-document.getElementById('q').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ 
+document.getElementById('q').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){
   const active = document.querySelector('.chip.active')?.textContent || '';
   search(active || null);
 }});
 
-// フッターリンク
+// 8) フッターリンク
 function updateSourceLinks(q){
   const area = '相模原';
   const kw = encodeURIComponent(q||'体験 ワークショップ');
@@ -238,8 +257,6 @@ function updateSourceLinks(q){
   })
 }
 updateSourceLinks('');
-// ▲▲ ここまで JS ▲▲
 </script>
 </body>
 </html>
-
