@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>人生マップ 管理（MVP）</title>
+<style>
+  body{font-family:system-ui;margin:20px;max-width:680px}
+  input,textarea,select,button{font:inherit;padding:8px;margin:4px 0}
+  textarea{width:100%;min-height:80px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin:12px 0}
+  small{color:#6b7280}
+  table{width:100%;border-collapse:collapse}
+  th,td{border-bottom:1px solid #eee;padding:6px;text-align:left}
+</style>
+
+<h1>人生マップ 管理（MVP）</h1>
+<div id="uidWrap">UID: <code id="uid">-</code></div>
+
+<div class="card">
+  <h2>メンター基本情報</h2>
+  <label>表示名（仮名推奨）<br><input id="displayName" placeholder="例：るかさん"></label>
+  <label>タグ（カンマ区切り）<br><input id="tags" placeholder="例：通信制,美大,工作,静か"></label>
+  <label>1行要約（任意）<br><input id="summary" placeholder="例：通信制から美大へ進学しデザイン職へ"></label>
+  <button id="create">新規作成（mentorId自動）</button>
+  <div>現在の mentorId: <code id="mentorId">（未作成）</code></div>
+</div>
+
+<div class="card">
+  <h2>10コマ入力</h2>
+  <small>各コマ：25文字以内。色は強調用（紫/グレー）。</small>
+  <div id="steps"></div>
+  <button id="saveAll">10コマを保存</button>
+</div>
+
+<div class="card">
+  <h2>読み込み確認</h2>
+  <button id="load">このmentorのコマを読む</button>
+  <table>
+    <thead><tr><th>step</th><th>text</th><th>color</th></tr></thead>
+    <tbody id="list"></tbody>
+  </table>
+</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import {
+    getFirestore, collection, addDoc, doc, setDoc, getDocs, query, orderBy, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ★あなたのFirebase設定
+  const firebaseConfig = { apiKey:"AIzaSyDA1g7BFkCNJzWfedaAwpkLX_MypeQBA-Q", authDomain:"futoko-1f0db.firebaseapp.com", projectId:"futoko-1f0db" };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const $ = (id)=>document.getElementById(id);
+  await signInAnonymously(auth);
+  $("uid").textContent = auth.currentUser.uid;
+
+  // 10コマ入力UIを生成
+  const stepsWrap = $("steps");
+  const fields = [];
+  for(let i=1;i<=10;i++){
+    const div = document.createElement("div");
+    div.className = "row";
+    div.innerHTML = `
+      <div>
+        <label>Step ${i}（25文字以内の表示文）
+          <textarea id="text${i}" maxlength="50" placeholder="例：学校の人間関係に疲れる"></textarea>
+        </label>
+        <small id="count${i}">0/25</small>
+      </div>
+      <div>
+        <label>詳細（自由記述）
+          <textarea id="detail${i}" placeholder="タップ時に開く詳細"></textarea>
+        </label>
+        <label>色
+          <select id="color${i}">
+            <option value="gray">gray</option>
+            <option value="purple">purple</option>
+          </select>
+        </label>
+      </div>`;
+    stepsWrap.appendChild(div);
+    const textEl = div.querySelector(`#text${i}`);
+    const countEl = div.querySelector(`#count${i}`);
+    textEl.addEventListener("input", ()=>{
+      const len = [...textEl.value].length;
+      countEl.textContent = `${len}/25`;
+      if(len>25){ textEl.style.borderColor="#ef4444"; } else { textEl.style.borderColor="#e5e7eb"; }
+    });
+    fields.push({
+      get: ()=>({
+        step:i,
+        text: textEl.value.trim(),
+        detail: div.querySelector(`#detail${i}`).value.trim(),
+        color: div.querySelector(`#color${i}`).value
+      })
+    });
+  }
+
+  let currentMentorId = null;
+
+  $("create").onclick = async ()=>{
+    const displayName = $("displayName").value.trim() || "（仮名）";
+    const tags = $("tags").value.split(",").map(s=>s.trim()).filter(Boolean);
+    const summary = $("summary").value.trim() || null;
+    const ref = await addDoc(collection(db,"mentors"), {
+      displayName, tags, summary,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+    });
+    currentMentorId = ref.id;
+    $("mentorId").textContent = currentMentorId;
+    alert("メンターを作成しました。次に10コマを保存してください。");
+  };
+
+  $("saveAll").onclick = async ()=>{
+    if(!currentMentorId) return alert("先にメンターを作成してください。");
+    // バリデーション：25文字以内＆10件揃っているか
+    const steps = fields.map(f=>f.get());
+    for(const s of steps){
+      const len = [...s.text].length;
+      if(len===0) return alert(`Step ${s.step} のtextが空です`);
+      if(len>25)  return alert(`Step ${s.step} は25文字以内にしてください（今${len}文字）`);
+    }
+    // 保存（steps サブコレクション）
+    for(const s of steps){
+      await setDoc(doc(db,"mentors",currentMentorId,"steps", String(s.step).padStart(2,"0")), {
+        step: s.step, text: s.text, detail: s.detail, color: s.color, updatedAt: serverTimestamp()
+      }, { merge:true });
+    }
+    alert("10コマを保存しました！");
+  };
+
+  $("load").onclick = async ()=>{
+    if(!currentMentorId) return alert("先にメンターを作成してください。");
+    const q = query(collection(db,"mentors",currentMentorId,"steps"), orderBy("step","asc"));
+    const snap = await getDocs(q);
+    const tbody = $("list"); tbody.innerHTML="";
+    snap.forEach(d=>{
+      const s = d.data();
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${s.step}</td><td>${s.text}</td><td>${s.color}</td>`;
+      tbody.appendChild(tr);
+    });
+  };
+</script>
+</html>
