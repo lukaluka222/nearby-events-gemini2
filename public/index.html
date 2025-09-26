@@ -111,18 +111,16 @@
   </footer>
 
 <script>
-/* ——— UI は明るく、挙動は従来のまま ——— */
+// タブ（プリセット）：先頭を「自然」に。おすすめは削除
+const PRESETS = ["自然","苔","手芸","編み物","木工","花屋","科学館","ガラス","竹細工"];
 
-// 1) プリセット（「おすすめ」先頭 & 初期選択）
-const PRESETS = ["おすすめ","苔","手芸","編み物","木工","花屋","科学館","ガラス","竹細工","自然観察"];
-
-// 2) 位置
+// 位置
 const locEl = document.getElementById('loc');
 let LOC = { lat:35.5710, lon:139.3707 };
 function updateLocLabel(){ locEl.textContent = `${LOC.lat.toFixed(3)}, ${LOC.lon.toFixed(3)}` }
 updateLocLabel();
 
-// 3) 描画
+// カード描画
 function render(items){
   const list=document.getElementById('list');
   const empty=document.getElementById('empty');
@@ -137,7 +135,6 @@ function render(items){
       <div class="body">
         <h3>${it.title||'（無題）'}</h3>
         <div class="meta">
-          <span>${it.source||new URL(it.url||'#').host.replace(/^www\./,'')}</span>
           <span>${it.place||''}</span>
           <span>距離 ${meta.d??'?'}km</span>
           <span>価格 ${typeof it.price==='number' ? (it.price+'円') : '無料/未定'}</span>
@@ -158,11 +155,9 @@ function openMap(lat,lon,title){
   window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank');
 }
 
-// 4) 検索（おすすめ = q空で /api 側に任せる）
-async function search(preset=null){
-  const qInput = document.getElementById('q');
-  const q = (preset === 'おすすめ') ? '' : (qInput.value.trim());
-
+// 検索（APIのみ使用）
+async function search(){
+  const q = document.getElementById('q').value.trim();
   const list = document.getElementById('list');
   list.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
 
@@ -181,76 +176,74 @@ async function search(preset=null){
       const ranked = data.map(it => {
         const d = (typeof it.distance_km === 'number') ? it.distance_km.toFixed(1) : '?';
         return { it: {
-          title: it.title||'（無題）', tags: Array.isArray(it.tags)?it.tags:[],
-          place: it.place||'', lat: (typeof it.lat==='number')?it.lat:LOC.lat,
-          lon: (typeof it.lon==='number')?it.lon:LOC.lon, price: (typeof it.price==='number')?it.price:null,
-          when: it.when||'', url: it.url||'#', source: 'API'
+          title: it.title||'（無題）',
+          tags: Array.isArray(it.tags)?it.tags:[],
+          place: it.place||'',
+          lat: (typeof it.lat==='number')?it.lat:LOC.lat,
+          lon: (typeof it.lon==='number')?it.lon:LOC.lon,
+          price: (typeof it.price==='number')?it.price:null,
+          when: it.when||'',
+          url: it.url||'#',
+          source: 'API'
         }, meta:{ s: it.score??0, d }};
       });
       render(ranked);
-      updateSourceLinks(q || '体験 ワークショップ');
+      updateSourceLinks(q || '自然 観察 体験');
       return;
     }
     render([]);
-    updateSourceLinks(q || '体験 ワークショップ');
+    updateSourceLinks(q || '自然 観察 体験');
   } catch (e) {
     console.warn('API error', e);
     render([]);
-    updateSourceLinks(q || '体験 ワークショップ');
+    updateSourceLinks(q || '自然 観察 体験');
   }
 }
 
-// 5) 位置ボタン
+// 現在地ボタン
 document.getElementById('geo').addEventListener('click',()=>{
   if(!navigator.geolocation){alert('位置情報が使えません');return}
   navigator.geolocation.getCurrentPosition((p)=>{
     LOC={lat:p.coords.latitude,lon:p.coords.longitude};
     updateLocLabel();
-    const active = document.querySelector('.chip.active')?.textContent || 'おすすめ';
-    search(active);
+    search();
   },()=>{alert('位置情報の取得に失敗しました')},{enableHighAccuracy:true,timeout:8000});
 });
 
-// 6) プリセット＆初回「おすすめ」自動検索
+// タブ生成（「自然」を最初に追加、クリックでqにセット→検索）
 const chipsEl=document.getElementById('chips');
 PRESETS.forEach(t=>{
   const b=document.createElement('button'); b.className='chip'; b.textContent=t;
   b.addEventListener('click',()=>{
-    document.getElementById('q').value = (t==='おすすめ') ? '' : t;
-    search(t);
+    document.getElementById('q').value=t;
+    search();
     [...document.querySelectorAll('.chip')].forEach(c=>c.classList.toggle('active', c.textContent===t));
   });
   chipsEl.appendChild(b);
 });
+
+// 初期表示：自然タブを選択＆自動検索（q="自然"）
 window.addEventListener('DOMContentLoaded', ()=>{
-  const first = document.querySelector('.chip');
-  if (first) {
-    first.classList.add('active');
-    document.getElementById('q').value='';
-    search('おすすめ');
-  }
+  document.getElementById('q').value = '自然';
+  const firstChip = document.querySelector('.chip');
+  if (firstChip) firstChip.classList.add('active'); // 「自然」
+  search();
 });
 
-// 7) 検索ボタン/Enter
-document.getElementById('go').addEventListener('click', ()=>{
-  const active = document.querySelector('.chip.active')?.textContent || '';
-  search(active || null);
-});
-document.getElementById('q').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){
-  const active = document.querySelector('.chip.active')?.textContent || '';
-  search(active || null);
-}});
+// 検索ボタン/Enter
+document.getElementById('go').addEventListener('click', search);
+document.getElementById('q').addEventListener('keydown', (e)=>{ if(e.key==='Enter') search(); });
 
-// 8) フッターリンク
+// フッターの外部リンク
 function updateSourceLinks(q){
   const area = '相模原';
-  const kw = encodeURIComponent(q||'体験 ワークショップ');
+  const kw = encodeURIComponent(q||'自然 観察 体験');
   const box=document.getElementById('sources');
   box.innerHTML='';
   const links=[
     {name:'じゃらん', url:`https://www.jalan.net/kankou/?word=${kw}`},
     {name:'相模原市 公式', url:`https://www.google.com/search?q=${encodeURIComponent('site:city.sagamihara.kanagawa.jp ')}${kw}`},
-    {name:'YouTube', url:`https://www.youtube.com/results?search_query=${encodeURIComponent(area+' '+(q||'作ってみた 体験'))}`}
+    {name:'YouTube', url:`https://www.youtube.com/results?search_query=${encodeURIComponent(area+' '+(q||'自然 観察 体験'))}`}
   ];
   links.forEach(l=>{
     const a=document.createElement('a'); a.href=l.url; a.target='_blank'; a.rel='noopener'; a.className='src'; a.textContent=l.name+'で探す'; box.appendChild(a);
@@ -258,5 +251,6 @@ function updateSourceLinks(q){
 }
 updateSourceLinks('');
 </script>
+
 </body>
 </html>
