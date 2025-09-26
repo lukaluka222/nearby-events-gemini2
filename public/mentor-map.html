@@ -75,32 +75,108 @@
 
  <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, getDocs, query, orderBy } 
-    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import {
+    getFirestore, collection, getDocs, query, orderBy
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyDA1g7BFkCNJzWfedaAwpkLX_MypeQBA-Q",
-    authDomain: "futoko-1f0db.firebaseapp.com",
-    projectId: "futoko-1f0db"
-  };
-
+  // ★ あなたの Firebase 設定に置き換え
+  const firebaseConfig = { apiKey:"AIza...本物", authDomain:"your-id.firebaseapp.com", projectId:"your-project-id" };
   const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
   const db = getFirestore(app);
 
+  // 画面に小さくデバッグ表示
+  function showInfo(msg, isError=false){
+    let el = document.getElementById("debugInfo");
+    if(!el){
+      el = document.createElement("div");
+      el.id = "debugInfo";
+      el.style.cssText = "position:fixed;left:8px;bottom:8px;background:#0008;color:#fff;padding:6px 8px;border-radius:8px;font:12px/1.4 system-ui;z-index:9999;max-width:90vw;word-break:break-all";
+      document.body.appendChild(el);
+    }
+    el.textContent = (isError?"❌ ":"ℹ️ ")+msg;
+  }
+
   // URLから mentorId を取得
-  const params = new URLSearchParams(location.search);
-  const mentorId = params.get("id");
+  const mentorId = new URLSearchParams(location.search).get("id");
+  if(!mentorId){
+    showInfo("URLに ?id=<mentorId> を付けてください（例 /mentor-map.html?id=N4WaF...）", true);
+    throw new Error("missing mentorId");
+  } else {
+    console.log("[mentorId]", mentorId);
+    showInfo("mentorId: "+mentorId);
+  }
 
-  // Firestoreからstepsを取得
-  const q = query(collection(db, "mentors", mentorId, "steps"), orderBy("step"));
-  const snap = await getDocs(q);
-  const steps = snap.docs.map(d => d.data());
+  // 将来のルール変更に備えて匿名ログイン
+  try {
+    await signInAnonymously(auth);
+    console.log("[auth] anon OK", auth.currentUser?.uid);
+  } catch (e) {
+    console.warn("[auth] anon failed", e);
+  }
 
-  // ここから下は「双六UIを描画するコード」に steps を渡せばOK
-  // （ダミーデータを使っていた部分を置き換え）
-  steps.forEach((s, i) => {
-    // パスに沿って配置する処理は既存コードそのまま
-  });
+  // Firestoreから steps を取得（step 昇順）
+  async function fetchSteps(){
+    const q = query(collection(db, "mentors", mentorId, "steps"), orderBy("step", "asc"));
+    const snap = await getDocs(q);
+    const arr = snap.docs.map(d => d.data());
+    // Console から見えるように外へ公開
+    window.lastSteps = arr;
+    console.log("[steps]", arr);
+    return arr;
+  }
+
+  // 描画
+  try {
+    const steps = await fetchSteps();          // ← Firestoreから実データ
+    if(!steps.length){
+      showInfo("steps が空です。mentors/"+mentorId+"/steps に 01..10 があるか、step が number 型か確認してください。", true);
+    }
+
+    // 既存のSVG/要素がある前提（id="track","canvas","dlg","dlgTitle","dlgBody"）
+    const path = document.getElementById("track");
+    const length = path.getTotalLength();
+    const canvas = document.getElementById("canvas");
+    const tPositions = [0.03,0.13,0.22,0.31,0.40,0.49,0.58,0.69,0.80,0.92];
+
+    const dlg = document.getElementById("dlg");
+    const dlgTitle = document.getElementById("dlgTitle");
+    const dlgBody = document.getElementById("dlgBody");
+
+    // いったん古いノードを消す（再読み込み対策）
+    [...canvas.querySelectorAll(".node")].forEach(n=>n.remove());
+
+    steps.forEach((s, i) => {
+      const t = tPositions[i] ?? (i/(steps.length-1));
+      const p = path.getPointAtLength(length * t);
+      const node = document.createElement("div");
+      node.className = "node";
+      node.style.left = p.x+"px";
+      node.style.top  = p.y+"px";
+      node.innerHTML = `
+        <div class="dot ${s.color === "purple" ? "purple" : "gray"}"></div>
+        <div class="bubble">${escapeHtml(s.text)}</div>
+      `;
+      node.onclick = () => {
+        dlgTitle.textContent = `第${s.step}コマ`;
+        dlgBody.textContent  = s.detail || "詳細は準備中です。";
+        dlg.showModal();
+      };
+      canvas.appendChild(node);
+    });
+
+    showInfo("表示OK（steps: "+steps.length+"件）");
+  } catch (e) {
+    console.error(e);
+    showInfo("読み込み/描画エラー: "+(e.message||e), true);
+  }
+
+  function escapeHtml(str){
+    return (str||"").replace(/[&<>"']/g, s=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[s]));
+  }
 </script>
+
+  
 
 </html>
